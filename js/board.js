@@ -1,7 +1,8 @@
 // Het canvas: oneindig whiteboard of notebook met pagina's.
 // Wereldcoördinaten worden met translate + scale op het scherm gezet.
 import { pathFromPoints, hitStroke, strokeBBox } from './ink.js';
-import { PAGE_W, PAGE_H, STICKY_COLORS, INK_COLORS, coverSVG, pageTop, uid } from './model.js';
+import { PAGE_W, PAGE_H, STICKY_COLORS, INK_COLORS, coverSVG, pageTop, uid, lineDate } from './model.js';
+import { confetti } from './fx.js';
 import { esc, icon } from './ui.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -50,6 +51,16 @@ function textToLines(text, old) {
     const t = m[2].trim();
     return { text: t, indent, hl: !!marked.get(t) };
   });
+}
+
+const DUE_TITLES = { today: 'Vandaag', soon: 'Binnenkort', past: 'Datum voorbij', later: '' };
+
+// Tekst van een regel; een datum vooraan krijgt een label.
+function lineHTML(l) {
+  const d = lineDate(l.text);
+  if (!d) return esc(l.text);
+  const state = l.hl ? 'done' : d.state;
+  return `<b class="due due-${state}" title="${DUE_TITLES[d.state]}">${esc(d.label)}</b> ${esc(d.rest)}`;
 }
 
 export class Board {
@@ -280,7 +291,7 @@ export class Board {
     if (it.kind === 'sticky') {
       const col = STICKY_COLORS[it.color] || STICKY_COLORS.geel;
       const lines = (it.lines || []).map((l, i) =>
-        `<li data-i="${i}" class="lvl-${l.indent || 0}${l.hl ? ' hl' : ''}"><span>${esc(l.text)}</span></li>`).join('');
+        `<li data-i="${i}" class="lvl-${l.indent || 0}${l.hl ? ' hl' : ''}"><span>${lineHTML(l)}</span></li>`).join('');
       return `<div class="item sticky${sel}" data-id="${it.id}" style="left:${it.x}px;top:${it.y}px;width:${it.w}px;min-height:${it.h}px;--bg:${col.bg};--hl:${col.hl}">
         <div class="sticky-title">${esc(it.title)}</div><ul class="sticky-lines">${lines}</ul><div class="handle"></div></div>`;
     }
@@ -720,10 +731,26 @@ export class Board {
     const it = this.item(a.id);
     if (a.line != null && it?.lines?.[a.line]) {
       this.pushUndo(a.snap);
-      it.lines[a.line].hl = !it.lines[a.line].hl;
+      const on = (it.lines[a.line].hl = !it.lines[a.line].hl);
       this.lastTap.toggled = true;
       this.renderItems();
       this.changed();
+      if (on) this.celebrate(it, a.line);
+    }
+  }
+
+  // Markeerstift-veeg over de nieuwe markering, en confetti als alles af is.
+  celebrate(it, line) {
+    const el = this.itemEl(it.id);
+    el?.querySelector(`li[data-i="${line}"]`)?.classList.add('hl-new');
+    if (el && it.lines.length > 1 && it.lines.every(l => l.hl)) {
+      const col = STICKY_COLORS[it.color] || STICKY_COLORS.geel;
+      // Wachten tot een eventuele dubbeltik voorbij is; die draait de markering terug.
+      setTimeout(() => {
+        const now = this.item(it.id);
+        const target = this.itemEl(it.id);
+        if (now?.lines.every(l => l.hl) && target && !this.editing) confetti(this.el, target, [col.bg, col.hl]);
+      }, 400);
     }
   }
 

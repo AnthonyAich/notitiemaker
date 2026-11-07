@@ -63,7 +63,41 @@ export function docText(doc) {
   return parts.join(' ').toLowerCase();
 }
 
-const SWIRL = 'M300 -40 C 140 200, 90 420, 160 560 C 230 690, 420 660, 420 560 C 420 470, 300 470, 270 560 C 230 690, 400 860, 600 860 C 760 860, 790 760, 730 720 C 650 670, 560 780, 600 920 C 640 1060, 760 1100, 880 1100';
+// Herkent een datum vooraan een regel, zoals "9/11:" of "23/11/2026".
+// Geeft { label, rest, state } terug; state is 'today', 'soon', 'past' of 'later'.
+export function lineDate(text, now = new Date()) {
+  const m = text.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(\s*:?\s*)/);
+  if (!m) return null;
+  const day = +m[1], month = +m[2];
+  if (day < 1 || day > 31 || month < 1 || month > 12) return null;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let date;
+  if (m[3]) {
+    date = new Date(m[3].length === 2 ? 2000 + +m[3] : +m[3], month - 1, day);
+  } else {
+    // Zonder jaartal: kies het jaar waarbij de datum het dichtst bij vandaag ligt.
+    date = [-1, 0, 1].map(o => new Date(today.getFullYear() + o, month - 1, day))
+      .sort((a, b) => Math.abs(a - today) - Math.abs(b - today))[0];
+  }
+  const days = Math.round((date - today) / 86400000);
+  const state = days === 0 ? 'today' : days < 0 ? 'past' : days <= 2 ? 'soon' : 'later';
+  return { label: m[0].replace(/\s*:?\s*$/, ''), rest: text.slice(m[0].length), state, days };
+}
+
+// Aantal regels en gemarkeerde regels in alle blaadjes van een document.
+export function stickyStats(doc) {
+  let total = 0, done = 0;
+  for (const it of doc.content?.items || []) {
+    if (it.kind !== 'sticky') continue;
+    for (const l of it.lines || []) {
+      total++;
+      if (l.hl) done++;
+    }
+  }
+  return { total, done };
+}
+
+const SWIRL ='M300 -40 C 140 200, 90 420, 160 560 C 230 690, 420 660, 420 560 C 420 470, 300 470, 270 560 C 230 690, 400 860, 600 860 C 760 860, 790 760, 730 720 C 650 670, 560 780, 600 920 C 640 1060, 760 1100, 880 1100';
 
 function wrapTitle(title) {
   const lines = [];

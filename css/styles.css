@@ -230,7 +230,27 @@ h1 { font-size: 44px; letter-spacing: -.02em; margin: 14px 0 18px; }
 .sticky-lines .lvl-1::before { content: "◦"; }
 .sticky-lines .lvl-2 { margin-left: 40px; }
 .sticky-lines .lvl-3 { margin-left: 60px; }
-.sticky-lines li.hl { background: var(--hl); border-radius: 10px; margin-right: auto; width: fit-content; padding-right: 8px; }
+.sticky-lines li.hl {
+  background: linear-gradient(var(--hl), var(--hl)) no-repeat 0 0 / 100% 100%;
+  border-radius: 10px; margin-right: auto; width: fit-content; padding-right: 8px;
+}
+/* Nieuwe markering: veegt van links naar rechts, zoals een markeerstift. */
+.sticky-lines li.hl-new { animation: hl-sweep .38s cubic-bezier(.3, .7, .3, 1); }
+@keyframes hl-sweep { from { background-size: 0% 100%; } }
+
+/* Datum vooraan een regel */
+.due { font-weight: inherit; padding: 0 5px; border-radius: 6px; background: rgba(0, 0, 0, .08); white-space: nowrap; }
+.due-today { background: #1e88e5; color: #fff; box-shadow: 0 0 0 0 rgba(30, 136, 229, .5); animation: due-pulse 2.4s ease-out infinite; }
+.due-soon { background: rgba(30, 136, 229, .18); color: #0b4f8a; }
+.due-past { color: #c92a2a; background: rgba(201, 42, 42, .1); }
+.due-done { background: transparent; padding: 0; }
+@keyframes due-pulse { 0% { box-shadow: 0 0 0 0 rgba(30, 136, 229, .45); } 70%, 100% { box-shadow: 0 0 0 7px rgba(30, 136, 229, 0); } }
+
+.confetti { position: absolute; z-index: 7; pointer-events: none; border-radius: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sticky-lines li.hl-new, .due-today { animation: none; }
+}
 .board[data-tool=select] .sticky-lines li { cursor: pointer; }
 .handle { display: none; position: absolute; right: -10px; bottom: -10px; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 3px solid #fff; cursor: nwse-resize; box-shadow: 0 1px 4px rgba(0, 0, 0, .3); }
 .board[data-tool=select] .sticky.selected .handle { display: block; }
@@ -338,3 +358,9 @@ h1 { font-size: 44px; letter-spacing: -.02em; margin: 14px 0 18px; }
   .tool { width: 42px; }
   .subbar { top: 8px; }
 }
+
+/* Voortgang op een kaartje in de bibliotheek */
+.progress { display: inline-flex; align-items: center; gap: 7px; margin-top: 6px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.progress .bar { width: 54px; height: 5px; border-radius: 3px; background: #2c2c30; overflow: hidden; }
+.progress .bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent-2); }
+.progress.full .bar i { background: var(--ok); }

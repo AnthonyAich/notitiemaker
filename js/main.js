@@ -1,7 +1,7 @@
 // App-shell: bibliotheek, editor, instellingen en synchronisatiestatus.
 import { store } from './store.js';
 import { Board } from './board.js';
-import { newDoc, cloneDoc, docText, COVERS, PAPERS, STICKY_COLORS, INK_COLORS, HL_COLORS } from './model.js';
+import { newDoc, cloneDoc, docText, stickyStats, COVERS, PAPERS, STICKY_COLORS, INK_COLORS, HL_COLORS } from './model.js';
 import { thumbSVG } from './thumb.js';
 import { esc, icon, dialog, confirmDialog, popMenu, closeMenu, toast, fmtDate } from './ui.js';
 
@@ -98,8 +98,25 @@ function sortedDocs() {
   return docs.sort(by);
 }
 
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 5) return 'Nog wakker? 🌙';
+  if (h < 12) return 'Goedemorgen ☀️';
+  if (h < 18) return 'Goedemiddag 👋';
+  return 'Goedenavond 🌆';
+}
+
+function progressHTML(d) {
+  const { total, done } = stickyStats(d);
+  if (!total) return '';
+  const pct = Math.round((done / total) * 100);
+  return `<div class="progress${done === total ? ' full' : ''}" title="${pct}% gemarkeerd">
+    <span class="bar"><i style="width:${pct}%"></i></span>${done}/${total}${done === total ? ' 🎉' : ''}
+  </div>`;
+}
+
 function renderLibrary() {
-  $('libTitle').textContent = FILTERS[S.filter].title;
+  $('libTitle').textContent = S.filter === 'all' && !S.query ? greeting() : FILTERS[S.filter].title;
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('on', b.dataset.filter === S.filter));
   const docs = sortedDocs();
   $('grid').innerHTML = docs.length ? docs.map(d => `
@@ -113,6 +130,7 @@ function renderLibrary() {
       <div class="meta">
         <button class="name" data-menu>${esc(d.title)}${icon('chevron')}</button>
         <div class="date">${fmtDate(d.updatedAt)}</div>
+        ${progressHTML(d)}
       </div>
     </article>`).join('')
     : `<div class="empty">${S.query ? 'Niets gevonden.' : 'Nog niets hier. Maak iets met <b>Nieuw</b>.'}</div>`;
