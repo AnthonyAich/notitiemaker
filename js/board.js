@@ -1,7 +1,7 @@
 // Het canvas: oneindig whiteboard of notebook met pagina's.
 // Wereldcoördinaten worden met translate + scale op het scherm gezet.
-import { pathFromPoints, hitStroke, strokeBBox } from './ink.js';
-import { PAGE_W, PAGE_H, STICKY_COLORS, INK_COLORS, coverSVG, pageTop, uid, lineDate } from './model.js';
+import { strokePath, hitStroke, strokeBBox, strokeInPolygon, pointInPolygon, recognizeShape } from './ink.js';
+import { PAGE_W, PAGE_H, STICKY_COLORS, INK_COLORS, coverSVG, weekPageSVG, pageTop, uid, lineDate } from './model.js';
 import { confetti } from './fx.js';
 import { esc, icon } from './ui.js';
 
@@ -11,6 +11,7 @@ const MAX_Z = 4;
 const OPTS_KEY = 'notitiemaker.tools.v1';
 const VIEW_KEY = 'notitiemaker.view.';
 const MAX_UNDO = 60;
+const HOLD_MS = 550;
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const r1 = v => Math.round(v * 10) / 10;
@@ -28,6 +29,7 @@ const DEFAULT_OPTS = {
   hlColor: '#ffe066', hlWidth: 20,
   textColor: '#1d1d1f', textSize: 28,
   stickyColor: 'geel',
+  shapeKind: 'arrow',
 };
 
 function readJSON(key) {
@@ -63,6 +65,63 @@ function lineHTML(l) {
   return `<b class="due due-${state}" title="${DUE_TITLES[d.state]}">${esc(d.label)}</b> ${esc(d.rest)}`;
 }
 
+// ---------- weergave als HTML (ook gebruikt om af te drukken) ----------
+
+function pagesHTML(doc, only = null) {
+  if (doc.type !== 'notebook') return '';
+  let html = '';
+  for (let i = 0; i < (doc.content.pages || 1); i++) {
+    if (only != null && i !== only) continue;
+    const paper = doc.paper || 'lijnen';
+    const cls = i === 0 ? 'cover' : `paper-${paper}`;
+    const inner = i === 0 ? coverSVG(doc) : paper === 'week' ? weekPageSVG() : '';
+    html += `<div class="page ${cls}" style="top:${pageTop(i)}px;width:${PAGE_W}px;height:${PAGE_H}px">${inner}</div>`;
+  }
+  return html;
+}
+
+function itemHTML(it, selected) {
+  const sel = it.id === selected ? ' selected' : '';
+  if (it.kind === 'sticky') {
+    const col = STICKY_COLORS[it.color] || STICKY_COLORS.geel;
+    const lines = (it.lines || []).map((l, i) =>
+      `<li data-i="${i}" class="lvl-${l.indent || 0}${l.hl ? ' hl' : ''}"><span>${lineHTML(l)}</span></li>`).join('');
+    return `<div class="item sticky${sel}" data-id="${it.id}" style="left:${it.x}px;top:${it.y}px;width:${it.w}px;min-height:${it.h}px;--bg:${col.bg};--hl:${col.hl}">
+      <div class="sticky-title">${esc(it.title)}</div><ul class="sticky-lines">${lines}</ul><div class="handle"></div></div>`;
+  }
+  return `<div class="item text${sel}" data-id="${it.id}" style="left:${it.x}px;top:${it.y}px;font-size:${it.size}px;color:${esc(it.color)}">${esc(it.text)}</div>`;
+}
+
+const pathCache = new WeakMap();
+function strokeHTML(s) {
+  let d = pathCache.get(s);
+  if (!d) { d = strokePath(s); pathCache.set(s, d); }
+  return `<path d="${d}" stroke="${esc(s.color)}" stroke-width="${s.width}"/>`;
+}
+
+function inkHTML(strokes) {
+  let hl = '', pen = '';
+  for (const s of strokes) {
+    if (s.tool === 'highlighter') hl += strokeHTML(s);
+    else pen += strokeHTML(s);
+  }
+  return { hl, pen };
+}
+
+// De hele wereld als HTML. Met `page` alleen wat op die notebookpagina staat.
+export function worldHTML(doc, page = null) {
+  let { items = [], strokes = [] } = doc.content;
+  if (page != null) {
+    const top = pageTop(page), bottom = top + PAGE_H;
+    items = items.filter(it => it.y < bottom && it.y + (it.h || 200) > top - 400);
+    strokes = strokes.filter(s => { const b = strokeBBox(s); return b.y < bottom && b.y + b.h > top; });
+  }
+  const ink = inkHTML(strokes);
+  return `<div class="pages-layer">${pagesHTML(doc, page)}</div>
+    <div class="items-layer">${items.map(it => itemHTML(it, null)).join('')}</div>
+    <svg class="ink-layer" width="1" height="1"><g class="ink-hl">${ink.hl}</g><g class="ink-pen">${ink.pen}</g></svg>`;
+}
+
 export class Board {
   constructor(host, doc, cb = {}) {
     this.cb = cb;
@@ -73,12 +132,12 @@ export class Board {
     this.action = null;
     this.editing = null;
     this.selected = null;
+    this.lasso = null;
     this.lastTap = null;
     this.penSeen = false;
     this.spaceDown = false;
     this.undoStack = [];
     this.redoStack = [];
-    this.paths = new WeakMap();
 
     this.el = document.createElement('div');
     this.el.className = 'board';
@@ -87,6 +146,7 @@ export class Board {
         <div class="pages-layer"></div>
         <div class="items-layer"></div>
         <svg class="ink-layer" width="1" height="1"><g class="ink-hl"></g><g class="ink-pen"></g><g class="ink-live"></g></svg>
+        <div class="lasso-box" hidden><div class="lasso-handle"></div></div>
       </div>
       <div class="item-bar" hidden></div>`;
     host.replaceChildren(this.el);
@@ -96,6 +156,7 @@ export class Board {
     this.gHl = this.el.querySelector('.ink-hl');
     this.gPen = this.el.querySelector('.ink-pen');
     this.gLive = this.el.querySelector('.ink-live');
+    this.lassoBox = this.el.querySelector('.lasso-box');
     this.bar = this.el.querySelector('.item-bar');
 
     this.bind();
@@ -113,6 +174,7 @@ export class Board {
     this.isNotebook = doc.type === 'notebook';
     this.el.classList.toggle('notebook', this.isNotebook);
     if (!this.c.items.some(i => i.id === this.selected)) this.selected = null;
+    this.lasso = null;
     this.renderAll();
     if (initial) {
       const v = readJSON(VIEW_KEY + doc.id);
@@ -150,6 +212,7 @@ export class Board {
     this.c.strokes = o.strokes;
     if (o.pages != null) this.c.pages = o.pages;
     this.selected = null;
+    this.lasso = null;
     this.renderAll();
   }
 
@@ -189,6 +252,7 @@ export class Board {
     this.tool = t;
     this.el.dataset.tool = t;
     if (t !== 'select') this.select(null);
+    if (t !== 'lasso') this.setLasso(null);
     this.setOpt('tool', t);
   }
 
@@ -202,6 +266,7 @@ export class Board {
   applyView() {
     const { x, y, z } = this.view;
     this.world.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
+    this.world.style.setProperty('--z', z);
     if (!this.isNotebook) {
       this.el.style.backgroundSize = `${24 * z}px ${24 * z}px`;
       this.el.style.backgroundPosition = `${x}px ${y}px`;
@@ -226,17 +291,20 @@ export class Board {
     this.zoomAt(this.el.clientWidth / 2, this.el.clientHeight / 2, this.view.z * f);
   }
 
-  bounds() {
+  itemRect(it) {
+    const el = this.itemEl(it.id);
+    return { x: it.x, y: it.y, w: el ? el.offsetWidth : it.w || 0, h: el ? el.offsetHeight : it.h || 0 };
+  }
+
+  // Omkadering van items en streken (standaard alles).
+  bounds(items = this.c.items, strokes = this.c.strokes) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const el of this.itemsLayer.children) {
-      x0 = Math.min(x0, el.offsetLeft); y0 = Math.min(y0, el.offsetTop);
-      x1 = Math.max(x1, el.offsetLeft + el.offsetWidth); y1 = Math.max(y1, el.offsetTop + el.offsetHeight);
-    }
-    for (const s of this.c.strokes) {
-      const b = strokeBBox(s);
+    const grow = b => {
       x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
       x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h);
-    }
+    };
+    items.forEach(it => grow(this.itemRect(it)));
+    strokes.forEach(s => grow(strokeBBox(s)));
     return x0 === Infinity ? null : { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   }
 
@@ -277,46 +345,20 @@ export class Board {
   }
 
   renderPages() {
-    if (!this.isNotebook) { this.pagesLayer.innerHTML = ''; return; }
-    let html = '';
-    for (let i = 0; i < (this.c.pages || 1); i++) {
-      const cls = i === 0 ? 'cover' : `paper-${this.doc.paper || 'lijnen'}`;
-      html += `<div class="page ${cls}" style="top:${pageTop(i)}px;width:${PAGE_W}px;height:${PAGE_H}px">${i === 0 ? coverSVG(this.doc) : ''}</div>`;
-    }
-    this.pagesLayer.innerHTML = html;
-  }
-
-  itemHTML(it) {
-    const sel = it.id === this.selected ? ' selected' : '';
-    if (it.kind === 'sticky') {
-      const col = STICKY_COLORS[it.color] || STICKY_COLORS.geel;
-      const lines = (it.lines || []).map((l, i) =>
-        `<li data-i="${i}" class="lvl-${l.indent || 0}${l.hl ? ' hl' : ''}"><span>${lineHTML(l)}</span></li>`).join('');
-      return `<div class="item sticky${sel}" data-id="${it.id}" style="left:${it.x}px;top:${it.y}px;width:${it.w}px;min-height:${it.h}px;--bg:${col.bg};--hl:${col.hl}">
-        <div class="sticky-title">${esc(it.title)}</div><ul class="sticky-lines">${lines}</ul><div class="handle"></div></div>`;
-    }
-    return `<div class="item text${sel}" data-id="${it.id}" style="left:${it.x}px;top:${it.y}px;font-size:${it.size}px;color:${esc(it.color)}">${esc(it.text)}</div>`;
+    this.pagesLayer.innerHTML = pagesHTML(this.doc);
   }
 
   renderItems() {
-    this.itemsLayer.innerHTML = this.c.items.map(it => this.itemHTML(it)).join('');
+    this.itemsLayer.innerHTML = this.c.items.map(it => itemHTML(it, this.selected)).join('');
+    this.renderLasso();
     this.updateBar();
   }
 
-  strokeHTML(s) {
-    let d = this.paths.get(s);
-    if (!d) { d = pathFromPoints(s.points); this.paths.set(s, d); }
-    return `<path d="${d}" stroke="${esc(s.color)}" stroke-width="${s.width}"/>`;
-  }
-
   renderInk() {
-    let hl = '', pen = '';
-    for (const s of this.c.strokes) {
-      if (s.tool === 'highlighter') hl += this.strokeHTML(s);
-      else pen += this.strokeHTML(s);
-    }
-    this.gHl.innerHTML = hl;
-    this.gPen.innerHTML = pen;
+    const ink = inkHTML(this.c.strokes);
+    this.gHl.innerHTML = ink.hl;
+    this.gPen.innerHTML = ink.pen;
+    this.renderLasso();
   }
 
   // ---------- selectie en balk ----------
@@ -327,46 +369,90 @@ export class Board {
     this.updateBar();
   }
 
+  setLasso(sel) {
+    this.lasso = sel && (sel.strokes.size || sel.items.size) ? sel : null;
+    this.renderLasso();
+    this.updateBar();
+  }
+
+  lassoParts() {
+    const { strokes, items } = this.lasso;
+    return {
+      strokes: this.c.strokes.filter(s => strokes.has(s.id)),
+      items: this.c.items.filter(i => items.has(i.id)),
+    };
+  }
+
+  lassoRect() {
+    if (!this.lasso) return null;
+    const p = this.lassoParts();
+    return this.bounds(p.items, p.strokes);
+  }
+
+  renderLasso() {
+    const b = this.lassoRect();
+    if (!b) { this.lassoBox.hidden = true; return; }
+    const pad = 8;
+    Object.assign(this.lassoBox.style, {
+      left: `${b.x - pad}px`, top: `${b.y - pad}px`, width: `${b.w + pad * 2}px`, height: `${b.h + pad * 2}px`,
+    });
+    this.lassoBox.hidden = false;
+  }
+
   updateBar() {
-    const it = this.selected && !this.editing && this.tool === 'select' ? this.item(this.selected) : null;
-    if (!it) { this.bar.hidden = true; this.barKey = null; return; }
-    const key = `${it.id}|${it.color}`;
-    if (key !== this.barKey) {
-      this.barKey = key;
-      let h = `<button data-act="edit">${icon('edit')}<span>Bewerk</span></button><span class="sep"></span>`;
-      if (it.kind === 'sticky') {
-        h += Object.entries(STICKY_COLORS).map(([k, c]) =>
-          `<button class="swatch${it.color === k ? ' on' : ''}" data-act="color" data-v="${k}" style="--c:${c.bg}" title="${k}"></button>`).join('');
-      } else {
-        h += INK_COLORS.filter(c => c !== '#ffffff').slice(0, 6).map(c =>
-          `<button class="swatch${it.color === c ? ' on' : ''}" data-act="color" data-v="${c}" style="--c:${c}"></button>`).join('');
+    let key = null, h = '';
+    const colors = list => list.filter(c => c !== '#ffffff').slice(0, 6);
+    if (this.tool === 'lasso' && this.lasso && !this.editing) {
+      key = `lasso|${[...this.lasso.strokes].join()}|${[...this.lasso.items].join()}`;
+      h = `${colors(INK_COLORS).map(c => `<button class="swatch" data-act="lcolor" data-v="${c}" style="--c:${c}" title="Kleur van het handschrift"></button>`).join('')}
+        <span class="sep"></span>
+        <button data-act="ldup" title="Dupliceren (⌘D)">${icon('copy')}</button>
+        <button data-act="ldel" title="Verwijderen (⌫)">${icon('trash')}</button>`;
+    } else if (this.tool === 'select' && this.selected && !this.editing) {
+      const it = this.item(this.selected);
+      if (it) {
+        key = `${it.id}|${it.color}`;
+        h = `<button data-act="edit">${icon('edit')}<span>Bewerk</span></button><span class="sep"></span>`;
+        h += it.kind === 'sticky'
+          ? Object.entries(STICKY_COLORS).map(([k, c]) =>
+            `<button class="swatch${it.color === k ? ' on' : ''}" data-act="color" data-v="${k}" style="--c:${c.bg}" title="${k}"></button>`).join('')
+          : colors(INK_COLORS).map(c =>
+            `<button class="swatch${it.color === c ? ' on' : ''}" data-act="color" data-v="${c}" style="--c:${c}"></button>`).join('');
+        h += `<span class="sep"></span>
+          <button data-act="front" title="Naar voren">${icon('front')}</button>
+          <button data-act="dup" title="Dupliceren (⌘D)">${icon('copy')}</button>
+          <button data-act="del" title="Verwijderen (⌫)">${icon('trash')}</button>`;
       }
-      h += `<span class="sep"></span>
-        <button data-act="front" title="Naar voren">${icon('front')}</button>
-        <button data-act="dup" title="Dupliceren (⌘D)">${icon('copy')}</button>
-        <button data-act="del" title="Verwijderen (⌫)">${icon('trash')}</button>`;
-      this.bar.innerHTML = h;
     }
+    if (!key) { this.bar.hidden = true; this.barKey = null; return; }
+    if (key !== this.barKey) { this.barKey = key; this.bar.innerHTML = h; }
     this.bar.hidden = false;
     this.positionBar();
   }
 
   positionBar() {
     if (this.bar.hidden) return;
-    const it = this.item(this.selected);
-    const el = it && this.itemEl(it.id);
-    if (!el) return;
+    let r = null;
+    if (this.tool === 'lasso') r = this.lassoRect();
+    else {
+      const it = this.item(this.selected);
+      if (it) r = this.itemRect(it);
+    }
+    if (!r) return;
     const { x, y, z } = this.view;
-    const cx = clamp(x + (it.x + el.offsetWidth / 2) * z, 120, this.el.clientWidth - 120);
-    let top = y + it.y * z - 14;
-    const below = top < 70;
-    if (below) top = y + (it.y + el.offsetHeight) * z + 14;
+    const cx = clamp(x + (r.x + r.w / 2) * z, 120, this.el.clientWidth - 120);
+    let top = y + r.y * z - 18;
+    const below = top < 110;
+    if (below) top = y + (r.y + r.h) * z + 18;
     this.bar.classList.toggle('below', below);
     this.bar.style.left = `${cx}px`;
     this.bar.style.top = `${top}px`;
   }
 
   barAction(act, v) {
+    if (act === 'lcolor') return this.lassoColor(v);
+    if (act === 'ldup') return this.lassoDuplicate();
+    if (act === 'ldel') return this.lassoDelete();
     const it = this.item(this.selected);
     if (!it) return;
     if (act === 'edit') return this.startEdit(it.id);
@@ -399,6 +485,83 @@ export class Board {
     this.selected = null;
     this.renderItems();
     this.changed();
+  }
+
+  // ---------- lasso-acties ----------
+
+  lassoColor(color) {
+    if (!this.lasso) return;
+    this.pushUndo(this.snapshot());
+    this.c.strokes = this.c.strokes.map(s => this.lasso.strokes.has(s.id) && s.tool !== 'highlighter' ? { ...s, color } : s);
+    this.c.items.forEach(it => { if (this.lasso.items.has(it.id) && it.kind === 'text') it.color = color; });
+    this.renderAll();
+    this.changed();
+  }
+
+  lassoDuplicate() {
+    if (!this.lasso) return;
+    this.pushUndo(this.snapshot());
+    const p = this.lassoParts();
+    const shift = ([x, y]) => [r1(x + 24), r1(y + 24)];
+    const strokes = p.strokes.map(s => ({ ...s, id: uid(), points: s.points.map(shift) }));
+    const items = p.items.map(it => ({ ...JSON.parse(JSON.stringify(it)), id: uid(), x: it.x + 24, y: it.y + 24 }));
+    this.c.strokes.push(...strokes);
+    this.c.items.push(...items);
+    this.lasso = { strokes: new Set(strokes.map(s => s.id)), items: new Set(items.map(i => i.id)) };
+    this.renderAll();
+    this.updateBar();
+    this.changed();
+  }
+
+  lassoDelete() {
+    if (!this.lasso) return;
+    this.pushUndo(this.snapshot());
+    const { strokes, items } = this.lasso;
+    this.c.strokes = this.c.strokes.filter(s => !strokes.has(s.id));
+    this.c.items = this.c.items.filter(i => !items.has(i.id));
+    this.lasso = null;
+    this.renderAll();
+    this.updateBar();
+    this.changed();
+  }
+
+  // Verplaatst (k = 1) of schaalt de lasso-selectie vanuit (ax, ay), vertrekkend van de originelen.
+  lassoTransform(a, dx, dy, k = 1) {
+    const { ax = 0, ay = 0 } = a;
+    const tf = ([x, y]) => [r1(ax + (x - ax) * k + dx), r1(ay + (y - ay) * k + dy)];
+    this.c.strokes = this.c.strokes.map(s => {
+      const o = a.orig.strokes.get(s.id);
+      return o ? { ...s, points: o.points.map(tf), width: r1(Math.max(0.5, o.width * k)) } : s;
+    });
+    for (const it of this.c.items) {
+      const o = a.orig.items.get(it.id);
+      if (!o) continue;
+      [it.x, it.y] = tf([o.x, o.y]).map(Math.round);
+      if (k !== 1) {
+        if (it.kind === 'text') it.size = Math.max(8, Math.round(o.size * k));
+        else { it.w = Math.max(140, Math.round(o.w * k)); it.h = Math.max(80, Math.round(o.h * k)); }
+      }
+    }
+    this.renderInk();
+    for (const it of this.c.items) {
+      if (!a.orig.items.has(it.id)) continue;
+      const el = this.itemEl(it.id);
+      if (!el) continue;
+      el.style.left = `${it.x}px`;
+      el.style.top = `${it.y}px`;
+      if (it.kind === 'text') el.style.fontSize = `${it.size}px`;
+      else { el.style.width = `${it.w}px`; el.style.minHeight = `${it.h}px`; }
+    }
+    this.renderLasso();
+    this.positionBar();
+  }
+
+  lassoOriginals() {
+    const p = this.lassoParts();
+    return {
+      strokes: new Map(p.strokes.map(s => [s.id, { points: s.points, width: s.width }])),
+      items: new Map(p.items.map(i => [i.id, { x: i.x, y: i.y, w: i.w, h: i.h, size: i.size }])),
+    };
   }
 
   addPage() {
@@ -536,6 +699,16 @@ export class Board {
     }
   }
 
+  livePath(stroke, cls = '') {
+    const p = document.createElementNS(SVGNS, 'path');
+    p.setAttribute('stroke', stroke.color);
+    p.setAttribute('stroke-width', stroke.width);
+    if (cls) p.setAttribute('class', cls);
+    p.setAttribute('d', strokePath(stroke));
+    this.gLive.append(p);
+    return p;
+  }
+
   down(e) {
     if (e.target.closest('.editing, .item-bar')) return;
     if (e.button === 2) return;
@@ -548,7 +721,6 @@ export class Board {
 
     if (this.pointers.size === 2) {
       // Tweede vinger: knijpen om te zoomen. Een half getekende lijn vervalt.
-      if (this.action?.type === 'draw') this.gLive.innerHTML = '';
       this.finishAction(false);
       const [a, b] = [...this.pointers.values()];
       this.action = { type: 'pinch', d0: dist(a, b) || 1, m0: mid(a, b), v0: { ...this.view } };
@@ -569,19 +741,34 @@ export class Board {
       case 'highlighter': {
         const hl = tool === 'highlighter';
         const s = { id: uid(), tool, color: hl ? this.opts.hlColor : this.opts.penColor, width: hl ? this.opts.hlWidth : this.opts.penWidth, points: [[r1(wx), r1(wy)]] };
-        const p = document.createElementNS(SVGNS, 'path');
-        p.setAttribute('stroke', s.color);
-        p.setAttribute('stroke-width', s.width);
-        if (hl) p.setAttribute('class', 'live-hl');
-        this.gLive.append(p);
-        this.action = { type: 'draw', s, p };
-        p.setAttribute('d', pathFromPoints(s.points));
+        this.action = { type: 'draw', s, p: this.livePath(s, hl ? 'live-hl' : '') };
+        break;
+      }
+      case 'shape': {
+        const s = { id: uid(), tool: 'pen', shape: this.opts.shapeKind, color: this.opts.penColor, width: this.opts.penWidth, points: [[r1(wx), r1(wy)], [r1(wx), r1(wy)]] };
+        this.action = { type: 'shape', s, p: this.livePath(s), sx: px, sy: py };
         break;
       }
       case 'eraser':
         this.action = { type: 'erase', snap: this.snapshot(), changed: false };
         this.eraseAt(wx, wy);
         break;
+      case 'lasso': {
+        const b = this.lassoRect();
+        const pad = 8, grab = 22 / this.view.z;
+        if (b && Math.hypot(wx - (b.x + b.w + pad), wy - (b.y + b.h + pad)) < grab) {
+          this.action = { type: 'lscale', sx: px, sy: py, ax: b.x, ay: b.y, bw: Math.max(b.w, 1), bh: Math.max(b.h, 1), orig: this.lassoOriginals(), snap: this.snapshot(), moved: false };
+        } else if (b && wx >= b.x - pad && wx <= b.x + b.w + pad && wy >= b.y - pad && wy <= b.y + b.h + pad) {
+          this.action = { type: 'lmove', sx: px, sy: py, orig: this.lassoOriginals(), snap: this.snapshot(), moved: false };
+        } else {
+          this.setLasso(null);
+          const p = document.createElementNS(SVGNS, 'path');
+          p.setAttribute('class', 'lasso-path');
+          this.gLive.append(p);
+          this.action = { type: 'lasso', pts: [[wx, wy]], p };
+        }
+        break;
+      }
       case 'text':
       case 'sticky':
         this.action = { type: 'create', tool, wx, wy, sx: px, sy: py, target: e.target.closest('.item')?.dataset.id };
@@ -614,6 +801,7 @@ export class Board {
     const a = this.action;
     if (!a) return;
     const z = this.view.z;
+    const [wx, wy] = this.toWorld(px, py);
 
     switch (a.type) {
       case 'pinch': {
@@ -621,9 +809,9 @@ export class Board {
         const [p1, p2] = [...this.pointers.values()];
         const m = mid(p1, p2);
         const nz = clamp(a.v0.z * dist(p1, p2) / a.d0, MIN_Z, MAX_Z);
-        const wx = (a.m0.x - a.v0.x) / a.v0.z;
-        const wy = (a.m0.y - a.v0.y) / a.v0.z;
-        this.view = { x: m.x - wx * nz, y: m.y - wy * nz, z: nz };
+        const ox = (a.m0.x - a.v0.x) / a.v0.z;
+        const oy = (a.m0.y - a.v0.y) / a.v0.z;
+        this.view = { x: m.x - ox * nz, y: m.y - oy * nz, z: nz };
         this.applyView();
         break;
       }
@@ -632,13 +820,56 @@ export class Board {
         this.applyView();
         break;
       case 'draw': {
+        if (a.snapped) {
+          // Na het herkennen van een rechte lijn volgt het eindpunt de pen.
+          if (a.s.shape === 'line') {
+            a.s = { ...a.s, points: [a.s.points[0], [r1(wx), r1(wy)]] };
+            a.p.setAttribute('d', strokePath(a.s));
+          }
+          break;
+        }
         const pts = a.s.points;
+        let added = false;
         for (const ev of coalesced(e)) {
           const [qx, qy] = this.toWorld(...this.local(ev));
           const last = pts[pts.length - 1];
-          if (Math.hypot(qx - last[0], qy - last[1]) * z >= 1.2) pts.push([r1(qx), r1(qy)]);
+          if (Math.hypot(qx - last[0], qy - last[1]) * z >= 1.2) { pts.push([r1(qx), r1(qy)]); added = true; }
         }
-        a.p.setAttribute('d', pathFromPoints(pts));
+        if (added) {
+          a.p.setAttribute('d', strokePath(a.s));
+          // Pen even stilhouden aan het einde = rechte lijn of nette vorm.
+          clearTimeout(a.hold);
+          a.hold = setTimeout(() => this.snapShape(a), HOLD_MS);
+        }
+        break;
+      }
+      case 'shape':
+        a.s.points[1] = [r1(wx), r1(wy)];
+        if (a.s.shape === 'rect' || a.s.shape === 'ellipse') {
+          if (e.shiftKey) {
+            // Shift = vierkant of cirkel.
+            const [x0, y0] = a.s.points[0];
+            const d = Math.max(Math.abs(wx - x0), Math.abs(wy - y0));
+            a.s.points[1] = [r1(x0 + Math.sign(wx - x0 || 1) * d), r1(y0 + Math.sign(wy - y0 || 1) * d)];
+          }
+        }
+        a.p.setAttribute('d', strokePath(a.s));
+        break;
+      case 'lasso': {
+        for (const ev of coalesced(e)) a.pts.push(this.toWorld(...this.local(ev)));
+        a.p.setAttribute('d', `M${a.pts.map(([x, y]) => `${r1(x)} ${r1(y)}`).join('L')}`);
+        break;
+      }
+      case 'lmove':
+      case 'lscale': {
+        if (!a.moved && Math.hypot(px - a.sx, py - a.sy) < 4) return;
+        a.moved = true;
+        if (a.type === 'lmove') this.lassoTransform(a, (px - a.sx) / z, (py - a.sy) / z);
+        else {
+          const [sx, sy] = this.toWorld(a.sx, a.sy);
+          const k = clamp(((wx - a.ax) / (sx - a.ax) + (wy - a.ay) / (sy - a.ay)) / 2, 0.1, 10);
+          this.lassoTransform(a, 0, 0, k);
+        }
         break;
       }
       case 'erase':
@@ -667,6 +898,16 @@ export class Board {
     }
   }
 
+  snapShape(a) {
+    if (this.action !== a || a.snapped) return;
+    const r = recognizeShape(a.s.points, a.s.tool === 'highlighter');
+    if (!r) return;
+    a.s = { ...a.s, shape: r.shape, points: r.points };
+    a.snapped = true;
+    a.p.setAttribute('d', strokePath(a.s));
+    a.p.classList.add('snapped');
+  }
+
   up(e, cancelled) {
     if (!this.pointers.has(e.pointerId)) return;
     this.pointers.delete(e.pointerId);
@@ -683,14 +924,37 @@ export class Board {
     const a = this.action;
     this.action = null;
     if (!a) return;
+    clearTimeout(a.hold);
     switch (a.type) {
       case 'draw':
+      case 'shape': {
         this.gLive.innerHTML = '';
         if (!commit) return;
+        if (a.type === 'shape') {
+          const [[x0, y0], [x1, y1]] = a.s.points;
+          if (Math.hypot(x1 - x0, y1 - y0) * this.view.z < 6) return;
+        }
         this.pushUndo(this.snapshot());
         this.c.strokes.push(a.s);
-        (a.s.tool === 'highlighter' ? this.gHl : this.gPen).insertAdjacentHTML('beforeend', this.strokeHTML(a.s));
+        (a.s.tool === 'highlighter' ? this.gHl : this.gPen).insertAdjacentHTML('beforeend', strokeHTML(a.s));
         this.changed();
+        break;
+      }
+      case 'lasso': {
+        this.gLive.innerHTML = '';
+        if (!commit || a.pts.length < 3) return;
+        const poly = a.pts;
+        const strokes = new Set(this.c.strokes.filter(s => strokeInPolygon(s, poly)).map(s => s.id));
+        const items = new Set(this.c.items.filter(it => {
+          const r = this.itemRect(it);
+          return pointInPolygon(r.x + r.w / 2, r.y + Math.min(r.h / 2, 40), poly);
+        }).map(it => it.id));
+        this.setLasso({ strokes, items });
+        break;
+      }
+      case 'lmove':
+      case 'lscale':
+        if (a.moved) { this.pushUndo(a.snap); this.changed(); this.updateBar(); }
         break;
       case 'erase':
         if (a.changed) { this.pushUndo(a.snap); this.changed(); }
@@ -771,16 +1035,19 @@ export class Board {
     const k = e.key.toLowerCase();
     if (mod && k === 'z') { e.shiftKey ? this.redo() : this.undo(); return true; }
     if (mod && k === 'y') { this.redo(); return true; }
+    if (mod && k === 'd' && this.lasso) { this.lassoDuplicate(); return true; }
     if (mod && k === 'd' && this.selected) { this.duplicate(); return true; }
     if (mod) return false;
+    if ((e.key === 'Backspace' || e.key === 'Delete') && this.lasso) { this.lassoDelete(); return true; }
     if ((e.key === 'Backspace' || e.key === 'Delete') && this.selected) { this.deleteSelected(); return true; }
+    if (e.key === 'Escape' && this.lasso) { this.setLasso(null); return true; }
     if (e.key === 'Escape' && this.selected) { this.select(null); return true; }
     if (e.key === 'Enter' && this.selected) { this.startEdit(this.selected); return true; }
     if (e.key === ' ') { this.spaceDown = true; return true; }
     if (e.key === '0') { this.fit(); return true; }
     if (e.key === '+' || e.key === '=') { this.zoomBy(1.25); return true; }
     if (e.key === '-') { this.zoomBy(0.8); return true; }
-    const tools = { v: 'select', p: 'pen', h: 'highlighter', e: 'eraser', t: 'text', n: 'sticky' };
+    const tools = { v: 'select', l: 'lasso', p: 'pen', h: 'highlighter', s: 'shape', e: 'eraser', t: 'text', n: 'sticky' };
     if (tools[k]) { this.cb.onToolKey?.(tools[k]); return true; }
     return false;
   }

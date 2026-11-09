@@ -1,6 +1,6 @@
 // Miniatuurweergave van een document voor de bibliotheek.
 import { STICKY_COLORS, coverSVG } from './model.js';
-import { pathFromPoints, strokeBBox } from './ink.js';
+import { strokePath, strokeBBox } from './ink.js';
 import { esc } from './ui.js';
 
 export function thumbSVG(doc) {
@@ -38,7 +38,7 @@ export function thumbSVG(doc) {
     const b = strokeBBox(s);
     grow(b.x, b.y, b.w, b.h);
     const hl = s.tool === 'highlighter' ? ' opacity=".45"' : '';
-    parts.push(`<path d="${pathFromPoints(s.points)}" stroke="${esc(s.color)}" stroke-width="${s.width}" fill="none" stroke-linecap="round" stroke-linejoin="round"${hl}/>`);
+    parts.push(`<path d="${strokePath(s)}" stroke="${esc(s.color)}" stroke-width="${s.width}" fill="none" stroke-linecap="round" stroke-linejoin="round"${hl}/>`);
   }
 
   if (!parts.length) return '<svg viewBox="0 0 400 300"></svg>';

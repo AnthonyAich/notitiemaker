@@ -364,3 +364,75 @@ h1 { font-size: 44px; letter-spacing: -.02em; margin: 14px 0 18px; }
 .progress .bar { width: 54px; height: 5px; border-radius: 3px; background: #2c2c30; overflow: hidden; }
 .progress .bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent-2); }
 .progress.full .bar i { background: var(--ok); }
+
+/* ---------- lasso, vormen en papiersoorten ---------- */
+
+.board[data-tool=lasso], .board[data-tool=shape] { cursor: crosshair; }
+.lasso-path { fill: rgba(30, 136, 229, .06); stroke: var(--accent); stroke-width: calc(1.5px / var(--z, 1)); stroke-dasharray: calc(6px / var(--z, 1)) calc(5px / var(--z, 1)); }
+.lasso-box {
+  position: absolute; pointer-events: none;
+  border: calc(1.5px / var(--z, 1)) dashed var(--accent);
+  border-radius: calc(6px / var(--z, 1));
+  background: rgba(30, 136, 229, .05);
+}
+.lasso-handle {
+  position: absolute; right: calc(-10px / var(--z, 1)); bottom: calc(-10px / var(--z, 1));
+  width: calc(20px / var(--z, 1)); height: calc(20px / var(--z, 1));
+  border-radius: 50%; background: var(--accent);
+  border: calc(3px / var(--z, 1)) solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+}
+.ink-live .snapped { animation: snap .25s ease-out; }
+@keyframes snap { 0% { opacity: .35; } 100% { opacity: 1; } }
+
+.paper-cornell {
+  background-image:
+    linear-gradient(90deg, transparent 219px, #f0a8a8 219px, #f0a8a8 221px, transparent 221px),
+    linear-gradient(transparent 899px, #f0a8a8 899px, #f0a8a8 901px, transparent 901px),
+    linear-gradient(transparent 39px, #c8d7ec 39px, #c8d7ec 40px);
+  background-size: 100% 100%, 100% 100%, 100% 40px;
+  background-position: 0 0, 0 0, 0 20px;
+}
+.paper-week svg { display: block; }
+
+.shape-kind { width: 40px; height: 36px; border-radius: 10px; display: grid; place-items: center; flex: none; }
+.shape-kind.on { background: #3a3a3e; }
+
+/* ---------- afdrukken ---------- */
+
+#print-root { position: fixed; left: -100000px; top: 0; visibility: hidden; pointer-events: none; }
+.print-page { position: relative; overflow: hidden; width: 210mm; height: 297mm; background: #fff; color: #222; }
+#print-root.landscape .print-page { width: 297mm; height: 210mm; }
+.print-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.print-world .handle, .print-world .page { box-shadow: none; }
+.print-world .page.cover { border-radius: 0; }
+
+@media print {
+  html, body { height: auto; overflow: visible; background: #fff; }
+  body > *:not(#print-root) { display: none !important; }
+  #print-root { position: static; visibility: visible; }
+  .print-page { break-after: page; page-break-after: always; }
+  .print-page:last-child { break-after: auto; page-break-after: auto; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+/* ---------- prullenbak, versies, sjablonen ---------- */
+
+.card.trashed .thumb { opacity: .55; filter: grayscale(.4); }
+.trash-note { color: var(--muted); font-size: 14px; margin: -14px 0 24px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.versions { list-style: none; margin: 8px 0 0; padding: 0; max-height: 50vh; overflow: auto; }
+.versions li { display: flex; align-items: center; gap: 12px; padding: 10px 4px; border-bottom: 1px solid #2c2c30; }
+.versions li:last-child { border-bottom: 0; }
+.versions .v-main { flex: 1; min-width: 0; }
+.versions .v-when { font-size: 15px; color: var(--text); }
+.versions .v-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.versions .btn { padding: 7px 12px; font-size: 14px; }
+.templates { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.tpl { position: relative; cursor: pointer; }
+.tpl input { position: absolute; opacity: 0; }
+.tpl span { display: block; padding: 12px; border-radius: 12px; background: #141416; border: 1px solid #38383d; color: var(--text); font-size: 15px; line-height: 1.3; height: 100%; }
+.tpl small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+.tpl input:checked + span { border-color: var(--accent-2); box-shadow: 0 0 0 2px var(--accent-2); }
+.tpl input:focus-visible + span { outline: 2px dashed var(--accent-2); outline-offset: 2px; }
+.warn-text { color: #ffcc66; font-size: 14px; line-height: 1.45; }
+.ocr-hit { display: inline-block; margin-top: 4px; font-size: 12px; color: var(--accent-2); }

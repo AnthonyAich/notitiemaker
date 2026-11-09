@@ -1,27 +1,36 @@
 // App-shell: bibliotheek, editor, instellingen en synchronisatiestatus.
 import { store } from './store.js';
 import { Board } from './board.js';
-import { newDoc, cloneDoc, docText, stickyStats, COVERS, PAPERS, STICKY_COLORS, INK_COLORS, HL_COLORS } from './model.js';
+import { newDoc, cloneDoc, docText, stickyStats, COVERS, PAPERS, STICKY_COLORS, INK_COLORS, HL_COLORS, BOARD_TEMPLATES } from './model.js';
 import { thumbSVG } from './thumb.js';
+import { printDoc } from './print.js';
+import { listVersions, getVersion, snapshot } from './versions.js';
+import { needsOcr, inkSignature, recognize } from './ocr.js';
 import { esc, icon, dialog, confirmDialog, popMenu, closeMenu, toast, fmtDate } from './ui.js';
 
 const TOOLS = [
   { id: 'select', icon: 'pointer', label: 'Selecteren en verplaatsen', key: 'V' },
-  { id: 'pen', icon: 'pen', label: 'Pen', key: 'P' },
+  { id: 'lasso', icon: 'lasso', label: 'Lasso: handschrift selecteren', key: 'L' },
+  { id: 'pen', icon: 'pen', label: 'Pen · hou stil aan het einde voor een rechte lijn of vorm', key: 'P' },
   { id: 'highlighter', icon: 'highlighter', label: 'Markeerstift', key: 'H' },
+  { id: 'shape', icon: 'shapes', label: 'Vormen en pijlen', key: 'S' },
   { id: 'eraser', icon: 'eraser', label: 'Gum', key: 'E' },
   { id: 'text', icon: 'text', label: 'Tekst', key: 'T' },
   { id: 'sticky', icon: 'sticky', label: 'Notitieblaadje', key: 'N' },
 ];
 
+const SHAPES = [['arrow', 'Pijl'], ['line', 'Lijn'], ['rect', 'Rechthoek'], ['ellipse', 'Ellips']];
+const TRASH_DAYS = 30;
+
 const FILTERS = {
-  all: { title: 'Documenten', test: () => true },
-  fav: { title: 'Favorieten', test: d => d.favorite },
-  board: { title: 'Whiteboards', test: d => d.type === 'board' },
-  notebook: { title: 'Notebooks', test: d => d.type === 'notebook' },
+  all: { title: 'Documenten', icon: 'folder', test: d => !d.trashedAt },
+  fav: { title: 'Favorieten', icon: 'star', test: d => !d.trashedAt && d.favorite },
+  board: { title: 'Whiteboards', icon: 'board', test: d => !d.trashedAt && d.type === 'board' },
+  notebook: { title: 'Notebooks', icon: 'book', test: d => !d.trashedAt && d.type === 'notebook' },
+  trash: { title: 'Prullenbak', icon: 'trash', test: d => !!d.trashedAt },
 };
 
-const S = { filter: 'all', query: '', sort: 'updated', board: null, doc: null, saveTimer: null, dirty: false };
+const S = { filter: 'all', query: '', sort: 'updated', board: null, doc: null, saveTimer: null, dirty: false, ocrError: '' };
 const $ = id => document.getElementById(id);
 
 function shell() {
@@ -30,13 +39,13 @@ function shell() {
     <aside class="sidebar">
       <div class="brand">${icon('logo')}<span>Notitiemaker</span></div>
       <nav>
-        ${Object.entries(FILTERS).map(([k, f]) => `<button class="nav-item" data-filter="${k}">${icon({ all: 'folder', fav: 'star', board: 'board', notebook: 'book' }[k])}<span>${f.title}</span></button>`).join('')}
+        ${Object.entries(FILTERS).map(([k, f]) => `<button class="nav-item" data-filter="${k}">${icon(f.icon)}<span>${f.title}</span></button>`).join('')}
       </nav>
       <button class="sync-chip" id="syncChip"></button>
     </aside>
     <main class="lib-main">
       <header class="lib-top">
-        <label class="search">${icon('search')}<input id="search" type="search" placeholder="Zoeken in titels en notities"></label>
+        <label class="search">${icon('search')}<input id="search" type="search" placeholder="Zoeken in titels, notities en handschrift"></label>
       </header>
       <h1 id="libTitle">Documenten</h1>
       <div class="lib-bar">
@@ -47,6 +56,7 @@ function shell() {
         </select>
         <button class="btn primary" id="newBtn">${icon('plus')}<span>Nieuw</span></button>
       </div>
+      <div id="trashNote"></div>
       <div class="grid" id="grid"></div>
     </main>
   </section>
@@ -55,7 +65,7 @@ function shell() {
     <header class="ed-top">
       <div class="ed-tabs">
         <button class="icon-btn" id="homeBtn" title="Terug naar documenten">${icon('home')}</button>
-        <button class="ed-title" id="docTitle" title="Naam wijzigen"></button>
+        <button class="ed-title" id="docTitle" title="Documentmenu"></button>
         <button class="icon-btn ed-sync" id="edSync" title="Synchronisatie"></button>
       </div>
       <div class="ed-tools">
@@ -68,6 +78,7 @@ function shell() {
         </div>
         <div class="grp">
           <button class="icon-btn" id="addPageBtn" title="Pagina toevoegen">${icon('filePlus')}</button>
+          <button class="icon-btn" id="printBtn" title="Afdrukken of opslaan als PDF">${icon('printer')}</button>
           <button class="icon-btn" id="fitBtn" title="Alles in beeld (0)">${icon('fit')}</button>
         </div>
       </div>
@@ -115,26 +126,47 @@ function progressHTML(d) {
   </div>`;
 }
 
+// Alleen gevonden in de herkende handschrift-tekst?
+function foundInInk(d, q) {
+  return q && (d.ocr?.text || '').toLowerCase().includes(q) && !docText({ ...d, ocr: null }).includes(q);
+}
+
+function trashDaysLeft(d) {
+  return Math.max(0, TRASH_DAYS - Math.floor((Date.now() - d.trashedAt) / 86400000));
+}
+
 function renderLibrary() {
   $('libTitle').textContent = S.filter === 'all' && !S.query ? greeting() : FILTERS[S.filter].title;
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('on', b.dataset.filter === S.filter));
+  const q = S.query.trim().toLowerCase();
   const docs = sortedDocs();
+  const inTrash = S.filter === 'trash';
+  $('trashNote').innerHTML = inTrash && docs.length
+    ? `<p class="trash-note">Documenten blijven ${TRASH_DAYS} dagen in de prullenbak en worden daarna definitief verwijderd.
+        <button class="btn ghost" id="emptyTrash">${icon('trash')} Prullenbak leegmaken</button></p>`
+    : '';
   $('grid').innerHTML = docs.length ? docs.map(d => `
-    <article class="card type-${d.type}" data-id="${d.id}">
+    <article class="card type-${d.type}${d.trashedAt ? ' trashed' : ''}" data-id="${d.id}">
       <div class="thumb-area">
         <div class="thumb" role="button" tabindex="0" aria-label="Open ${esc(d.title)}">
           ${thumbSVG(d)}
-          <button class="fav${d.favorite ? ' on' : ''}" data-fav title="Favoriet">${icon(d.favorite ? 'starFill' : 'star')}</button>
+          ${inTrash ? '' : `<button class="fav${d.favorite ? ' on' : ''}" data-fav title="Favoriet">${icon(d.favorite ? 'starFill' : 'star')}</button>`}
         </div>
       </div>
       <div class="meta">
         <button class="name" data-menu>${esc(d.title)}${icon('chevron')}</button>
-        <div class="date">${fmtDate(d.updatedAt)}</div>
-        ${progressHTML(d)}
+        <div class="date">${inTrash ? `Nog ${trashDaysLeft(d)} dagen` : fmtDate(d.updatedAt)}</div>
+        ${inTrash ? '' : progressHTML(d)}
+        ${foundInInk(d, q) ? '<span class="ocr-hit">✍️ gevonden in handschrift</span>' : ''}
       </div>
     </article>`).join('')
-    : `<div class="empty">${S.query ? 'Niets gevonden.' : 'Nog niets hier. Maak iets met <b>Nieuw</b>.'}</div>`;
+    : `<div class="empty">${S.query ? 'Niets gevonden.' : inTrash ? 'De prullenbak is leeg.' : 'Nog niets hier. Maak iets met <b>Nieuw</b>.'}</div>`;
 }
+
+const coverOptions = selected => Object.entries(COVERS).map(([k, c], i) =>
+  `<label class="cover-opt" title="${k}"><input type="radio" name="cover" value="${k}"${(selected ? selected === k : !i) ? ' checked' : ''}><i style="background:linear-gradient(135deg,${c.bg} 42%,${c.accent} 42% 56%,${c.bg} 56%)"></i></label>`).join('');
+const paperOptions = selected => Object.entries(PAPERS).map(([k, l]) =>
+  `<option value="${k}"${selected === k ? ' selected' : ''}>${l}</option>`).join('');
 
 async function askNotebook() {
   const res = await dialog({
@@ -142,12 +174,8 @@ async function askNotebook() {
     submit: 'Maken',
     body: `
       <label class="field"><span>Titel</span><input name="title" value="Naamloos notebook" required autofocus></label>
-      <div class="field"><span>Kaft</span><div class="covers">
-        ${Object.entries(COVERS).map(([k, c], i) => `<label class="cover-opt" title="${k}"><input type="radio" name="cover" value="${k}"${i ? '' : ' checked'}><i style="background:linear-gradient(135deg,${c.bg} 42%,${c.accent} 42% 56%,${c.bg} 56%)"></i></label>`).join('')}
-      </div></div>
-      <label class="field"><span>Papier</span><select name="paper">
-        ${Object.entries(PAPERS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}
-      </select></label>`,
+      <div class="field"><span>Kaft</span><div class="covers">${coverOptions()}</div></div>
+      <label class="field"><span>Papier</span><select name="paper">${paperOptions('lijnen')}</select></label>`,
   });
   if (!res) return;
   const d = newDoc('notebook', res.title.trim() || 'Naamloos notebook', res);
@@ -159,10 +187,15 @@ async function askBoard() {
   const res = await dialog({
     title: 'Nieuw whiteboard',
     submit: 'Maken',
-    body: '<label class="field"><span>Titel</span><input name="title" value="Naamloos whiteboard" required autofocus></label>',
+    body: `
+      <label class="field"><span>Titel</span><input name="title" value="Naamloos whiteboard" required autofocus></label>
+      <div class="field"><span>Sjabloon</span><div class="templates">
+        ${Object.entries(BOARD_TEMPLATES).map(([k, t], i) => `<label class="tpl"><input type="radio" name="template" value="${k}"${i ? '' : ' checked'}><span>${t.label}<small>${t.hint}</small></span></label>`).join('')}
+      </div></div>`,
   });
   if (!res) return;
-  const d = newDoc('board', res.title.trim() || 'Naamloos whiteboard');
+  const title = res.title.trim() || 'Naamloos whiteboard';
+  const d = newDoc('board', title === 'Naamloos whiteboard' && res.template !== 'leeg' ? BOARD_TEMPLATES[res.template].label : title, res);
   store.save(d);
   openDoc(d.id);
 }
@@ -183,12 +216,8 @@ async function changeCover(doc) {
     title: 'Kaft en papier',
     submit: 'Opslaan',
     body: `
-      <div class="field"><span>Kaft</span><div class="covers">
-        ${Object.entries(COVERS).map(([k, c]) => `<label class="cover-opt" title="${k}"><input type="radio" name="cover" value="${k}"${doc.cover === k ? ' checked' : ''}><i style="background:linear-gradient(135deg,${c.bg} 42%,${c.accent} 42% 56%,${c.bg} 56%)"></i></label>`).join('')}
-      </div></div>
-      <label class="field"><span>Papier</span><select name="paper">
-        ${Object.entries(PAPERS).map(([k, l]) => `<option value="${k}"${doc.paper === k ? ' selected' : ''}>${l}</option>`).join('')}
-      </select></label>`,
+      <div class="field"><span>Kaft</span><div class="covers">${coverOptions(doc.cover)}</div></div>
+      <label class="field"><span>Papier</span><select name="paper">${paperOptions(doc.paper)}</select></label>`,
   });
   if (!res) return;
   doc.cover = res.cover;
@@ -226,23 +255,181 @@ function importFile() {
   input.click();
 }
 
-function cardMenu(anchor, doc) {
-  popMenu(anchor, [
-    { icon: 'open', label: 'Openen', action: () => openDoc(doc.id) },
+// ---------- prullenbak ----------
+
+function moveToTrash(doc) {
+  if (S.doc?.id === doc.id) { location.hash = ''; }
+  doc.trashedAt = Date.now();
+  store.save(doc);
+  renderLibrary();
+  toast(`"${doc.title}" staat in de prullenbak`);
+}
+
+function restoreFromTrash(doc) {
+  delete doc.trashedAt;
+  store.save(doc);
+  renderLibrary();
+  toast(`"${doc.title}" is teruggezet`);
+}
+
+async function deleteForever(doc) {
+  if (await confirmDialog(`"${doc.title}" definitief verwijderen?`, 'Dit kan niet ongedaan gemaakt worden. Het document verdwijnt ook uit je Google Sheet en van je andere toestellen.')) {
+    store.remove(doc.id);
+    renderLibrary();
+  }
+}
+
+async function emptyTrash() {
+  const docs = store.list().filter(d => d.trashedAt);
+  if (!docs.length) return;
+  if (await confirmDialog('Prullenbak leegmaken?', `${docs.length} document${docs.length === 1 ? '' : 'en'} definitief verwijderen. Dit kan niet ongedaan gemaakt worden.`, 'Leegmaken')) {
+    docs.forEach(d => store.remove(d.id));
+    renderLibrary();
+  }
+}
+
+function purgeOldTrash() {
+  for (const d of store.list()) {
+    if (d.trashedAt && Date.now() - d.trashedAt > TRASH_DAYS * 86400000) store.remove(d.id);
+  }
+}
+
+// ---------- versiegeschiedenis ----------
+
+const fmtWhen = at => new Date(at).toLocaleString('nl-BE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+async function showVersions(doc) {
+  flushSave();
+  const local = (await listVersions(doc.id)).map(v => ({ ...v, src: 'local' }));
+  let cloud = [], note = '';
+  if (store.config.url) {
+    try {
+      cloud = (await store.request('versions', { id: doc.id })).versions.map(v => ({ ...v, src: 'cloud' }));
+    } catch (e) {
+      note = /Onbekende actie/.test(e.message)
+        ? 'Werk je Apps Script bij (zie README) om versies ook in Google Sheets te bewaren.'
+        : `Versies in Google Sheets zijn nu niet beschikbaar: ${e.message}`;
+    }
+  }
+  const rows = [...local, ...cloud].sort((a, b) => b.at - a.at);
+  await dialog({
+    title: `Versies van "${doc.title}"`,
+    submit: 'Sluiten',
+    cancel: '',
+    body: `
+      <p class="muted">Er wordt automatisch een versie bewaard als je een document opent, en terwijl je werkt hoogstens om de 20 minuten. Terugzetten kun je ongedaan maken.</p>
+      ${note ? `<p class="warn-text">${esc(note)}</p>` : ''}
+      ${rows.length ? `<ul class="versions">${rows.map((v, i) => `
+        <li>
+          <div class="v-main">
+            <div class="v-when">${fmtWhen(v.at)}</div>
+            <div class="v-meta">${v.src === 'local' ? 'Op dit toestel' : 'In Google Sheets'}${v.size != null ? ` · ${v.size} onderdelen` : ''}</div>
+          </div>
+          <button type="button" class="btn ghost" data-restore="${i}">${icon('restore')} Terugzetten</button>
+        </li>`).join('')}</ul>` : '<p class="muted">Nog geen eerdere versies.</p>'}`,
+    onOpen(d) {
+      d.addEventListener('click', e => {
+        const b = e.target.closest('[data-restore]');
+        if (!b) return;
+        d.close();
+        restoreVersion(doc, rows[+b.dataset.restore]);
+      });
+    },
+  });
+}
+
+async function restoreVersion(doc, v) {
+  let old;
+  try {
+    old = v.src === 'local' ? await getVersion(v.key) : (await store.request('version', { id: doc.id, at: v.at })).doc;
+  } catch (e) {
+    return toast(e.message, 'err');
+  }
+  if (!old?.content) return toast('Deze versie kon niet gelezen worden', 'err');
+  await snapshot(doc, 0);
+  const live = S.doc?.id === doc.id && S.board;
+  if (live) S.board.pushUndo(S.board.snapshot());
+  doc.content = old.content;
+  for (const k of ['title', 'cover', 'paper']) if (old[k] !== undefined) doc[k] = old[k];
+  store.save(doc);
+  if (live) {
+    S.board.load(doc);
+    $('docTitle').innerHTML = `<span>${esc(doc.title)}</span>${icon('chevron')}`;
+  } else {
+    renderLibrary();
+  }
+  toast(`Versie van ${fmtWhen(v.at)} teruggezet`);
+}
+
+// ---------- handschrift herkennen ----------
+
+const ocrQueue = new Set();
+let ocrRunning = false;
+
+function ocrAvailable() {
+  return !!store.config.url && store.api >= 2;
+}
+
+function queueOcr(doc) {
+  if (!doc || !ocrAvailable() || !needsOcr(doc)) return;
+  ocrQueue.add(doc.id);
+  runOcr();
+}
+
+async function runOcr(onProgress) {
+  if (ocrRunning) return;
+  ocrRunning = true;
+  let done = 0;
+  try {
+    for (const id of ocrQueue) {
+      ocrQueue.delete(id);
+      const doc = store.get(id);
+      if (!doc || !needsOcr(doc)) continue;
+      const res = await recognize(doc, (action, payload) => store.request(action, payload));
+      const fresh = store.get(id);
+      // Intussen opnieuw getekend? Dan later nog eens.
+      if (!fresh || inkSignature(fresh) !== res.sig) continue;
+      fresh.ocr = res;
+      store.save(fresh);
+      onProgress?.(++done);
+    }
+    S.ocrError = '';
+  } catch (e) {
+    S.ocrError = e.message;
+    console.warn('Handschrift herkennen mislukt:', e.message);
+  } finally {
+    ocrRunning = false;
+  }
+}
+
+// ---------- menu's ----------
+
+function docMenuItems(doc) {
+  return [
     { icon: 'edit', label: 'Naam wijzigen', action: () => rename(doc) },
     { icon: doc.favorite ? 'star' : 'starFill', label: doc.favorite ? 'Uit favorieten' : 'Aan favorieten toevoegen', action: () => { doc.favorite = !doc.favorite; saveNow(doc); } },
     ...(doc.type === 'notebook' ? [{ icon: 'palette', label: 'Kaft en papier', action: () => changeCover(doc) }] : []),
-    { icon: 'copy', label: 'Dupliceren', action: () => { store.save(cloneDoc(doc)); renderLibrary(); } },
+    { icon: 'printer', label: 'Afdrukken of opslaan als PDF', action: () => { flushSave(); printDoc(doc); } },
+    { icon: 'history', label: 'Versiegeschiedenis', action: () => showVersions(doc) },
     { icon: 'download', label: 'Exporteren (.json)', action: () => downloadJSON(`${slug(doc.title)}.json`, doc) },
+  ];
+}
+
+function cardMenu(anchor, doc) {
+  if (doc.trashedAt) {
+    popMenu(anchor, [
+      { icon: 'restore', label: 'Terugzetten', action: () => restoreFromTrash(doc) },
+      '-',
+      { icon: 'trash', label: 'Definitief verwijderen', danger: true, action: () => deleteForever(doc) },
+    ]);
+    return;
+  }
+  popMenu(anchor, [
+    { icon: 'open', label: 'Openen', action: () => openDoc(doc.id) },
+    ...docMenuItems(doc),
+    { icon: 'copy', label: 'Dupliceren', action: () => { store.save(cloneDoc(doc)); renderLibrary(); } },
     '-',
-    {
-      icon: 'trash', label: 'Verwijderen', danger: true, action: async () => {
-        if (await confirmDialog(`"${doc.title}" verwijderen?`, 'Het document verdwijnt ook uit je Google Sheet en van je andere toestellen.')) {
-          store.remove(doc.id);
-          renderLibrary();
-        }
-      },
-    },
+    { icon: 'trash', label: 'Naar prullenbak', danger: true, action: () => moveToTrash(doc) },
   ]);
 }
 
@@ -273,6 +460,7 @@ function flushSave() {
   if (S.dirty && S.doc) {
     S.dirty = false;
     store.save(S.doc);
+    snapshot(S.doc, 20);
   }
 }
 
@@ -281,6 +469,7 @@ function showEditor(doc) {
   if (S.doc?.id === doc.id) return;
   closeEditor();
   S.doc = doc;
+  snapshot(doc, 5);
   $('library').hidden = true;
   $('editor').hidden = false;
   $('editor').classList.toggle('is-notebook', doc.type === 'notebook');
@@ -298,11 +487,13 @@ function showEditor(doc) {
 
 function closeEditor() {
   if (!S.board) return;
+  const doc = S.doc;
   S.board.destroy();
   flushSave();
   S.board = null;
   S.doc = null;
   $('boardHost').innerHTML = '';
+  queueOcr(doc);
 }
 
 function showLibrary() {
@@ -329,10 +520,15 @@ function renderSubbar() {
   const widths = (list, cur, key, color) => list.map(([w, dot]) =>
     `<button class="width${w === cur ? ' on' : ''}" data-k="${key}" data-v="${w}" data-num aria-label="Dikte ${w}"><i style="width:${dot}px;height:${dot}px;background:${color}"></i></button>`).join('');
   const sep = '<span class="sep"></span>';
+  const penWidths = () => widths([[1.5, 4], [3, 7], [5, 11]], o.penWidth, 'penWidth', '#ffffff');
   let h;
   switch (b.tool) {
     case 'pen':
-      h = widths([[1.5, 4], [3, 7], [5, 11]], o.penWidth, 'penWidth', '#ffffff') + sep + swatches(INK_COLORS, o.penColor, 'penColor') + custom('penColor', o.penColor);
+      h = penWidths() + sep + swatches(INK_COLORS, o.penColor, 'penColor') + custom('penColor', o.penColor);
+      break;
+    case 'shape':
+      h = SHAPES.map(([k, l]) => `<button class="shape-kind${o.shapeKind === k ? ' on' : ''}" data-k="shapeKind" data-v="${k}" title="${l}" aria-label="${l}">${icon(k)}</button>`).join('')
+        + sep + penWidths() + sep + swatches(INK_COLORS, o.penColor, 'penColor');
       break;
     case 'highlighter':
       h = widths([[12, 7], [20, 11], [32, 16]], o.hlWidth, 'hlWidth', o.hlColor) + sep + swatches(HL_COLORS, o.hlColor, 'hlColor') + custom('hlColor', o.hlColor);
@@ -346,6 +542,9 @@ function renderSubbar() {
       h = Object.entries(STICKY_COLORS).map(([k, c]) =>
         `<button class="swatch${k === o.stickyColor ? ' on' : ''}" style="--c:${c.bg}" data-k="stickyColor" data-v="${k}" title="${k}"></button>`).join('')
         + '<span class="hint">Tik om een blaadje te plaatsen</span>';
+      break;
+    case 'lasso':
+      h = '<span class="hint">Omcirkel handschrift om het te verplaatsen · blauw bolletje = groter of kleiner</span>';
       break;
     case 'eraser':
       h = '<span class="hint">Veeg over een lijn om ze te wissen</span>';
@@ -378,6 +577,7 @@ function renderStatus() {
 
 async function openSettings() {
   const c = store.config;
+  const oldScript = c.url && store.api === 1;
   await dialog({
     title: 'Google Sheets-koppeling',
     submit: 'Opslaan',
@@ -387,6 +587,10 @@ async function openSettings() {
       <label class="field"><span>Token (staat bovenaan Code.gs)</span><input name="token" type="password" autocomplete="off" value="${esc(c.token)}"></label>
       <div class="row"><button type="button" class="btn ghost" data-test>${icon('sync')} Verbinding testen</button><span class="test-out muted"></span></div>
       ${store.status.state === 'error' ? `<p class="err-text">${esc(store.status.message)}</p>` : ''}
+      ${oldScript ? '<p class="warn-text">Je Apps Script is een oudere versie. Werk het bij (README → "Apps Script bijwerken") voor versies in de cloud en zoeken in handschrift.</p>' : ''}
+      <hr>
+      <p class="muted">Zoeken in handschrift: je pennenstreken worden met Google tekstherkenning gelezen zodra je een document sluit.</p>
+      <div class="row"><button type="button" class="btn ghost" data-ocr${ocrAvailable() ? '' : ' disabled'}>${icon('search')} Alle handschrift nu herkennen</button><span class="ocr-out muted">${esc(S.ocrError)}</span></div>
       <hr>
       <div class="row">
         <button type="button" class="btn ghost" data-export>${icon('download')} Back-up downloaden</button>
@@ -398,13 +602,23 @@ async function openSettings() {
         out.textContent = 'Bezig…';
         out.className = 'test-out muted';
         try {
-          await store.test(d.querySelector('[name=url]').value.trim(), d.querySelector('[name=token]').value.trim());
-          out.textContent = 'Verbinding werkt ✓';
+          const res = await store.test(d.querySelector('[name=url]').value.trim(), d.querySelector('[name=token]').value.trim());
+          out.textContent = res.api >= 2 ? 'Verbinding werkt ✓' : 'Verbinding werkt ✓ (oudere scriptversie)';
           out.className = 'test-out st-ok';
         } catch (e) {
           out.textContent = e.message;
           out.className = 'test-out st-error';
         }
+      };
+      const ocrOut = d.querySelector('.ocr-out');
+      d.querySelector('[data-ocr]').onclick = async () => {
+        const todo = store.list().filter(needsOcr);
+        if (!todo.length) { ocrOut.textContent = 'Alles is al herkend ✓'; return; }
+        todo.forEach(doc => ocrQueue.add(doc.id));
+        ocrOut.textContent = `Bezig… 0/${todo.length}`;
+        await runOcr(n => { ocrOut.textContent = `Bezig… ${n}/${todo.length}`; });
+        ocrOut.textContent = S.ocrError || 'Klaar ✓';
+        ocrOut.className = `ocr-out ${S.ocrError ? 'st-error' : 'st-ok'}`;
       };
       d.querySelector('[data-export]').onclick = () => downloadJSON(`notitiemaker-backup-${new Date().toISOString().slice(0, 10)}.json`, store.list());
       d.querySelector('[data-import]').onclick = () => { d.close(); importFile(); };
@@ -419,7 +633,7 @@ async function openSettings() {
 function route() {
   const m = location.hash.match(/^#\/d\/(.+)$/);
   const doc = m && store.get(decodeURIComponent(m[1]));
-  if (doc) showEditor(doc);
+  if (doc && !doc.trashedAt) showEditor(doc);
   else {
     if (m) history.replaceState(null, '', location.pathname + location.search);
     showLibrary();
@@ -439,6 +653,7 @@ function bindEvents() {
     '-',
     { icon: 'upload', label: 'Importeren (.json)', action: importFile },
   ]));
+  $('trashNote').addEventListener('click', e => { if (e.target.closest('#emptyTrash')) emptyTrash(); });
   $('grid').addEventListener('click', e => {
     const card = e.target.closest('.card');
     if (!card) return;
@@ -451,11 +666,12 @@ function bindEvents() {
     } else if (e.target.closest('[data-menu]')) {
       cardMenu(e.target.closest('[data-menu]'), doc);
     } else if (e.target.closest('.thumb')) {
-      openDoc(doc.id);
+      if (doc.trashedAt) cardMenu(e.target.closest('.card').querySelector('[data-menu]'), doc);
+      else openDoc(doc.id);
     }
   });
   $('grid').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && e.target.classList.contains('thumb')) openDoc(e.target.closest('.card').dataset.id);
+    if (e.key === 'Enter' && e.target.classList.contains('thumb')) e.target.click();
   });
   $('syncChip').addEventListener('click', openSettings);
   $('edSync').addEventListener('click', openSettings);
@@ -464,10 +680,9 @@ function bindEvents() {
   $('docTitle').addEventListener('click', e => {
     const doc = S.doc;
     popMenu(e.currentTarget, [
-      { icon: 'edit', label: 'Naam wijzigen', action: () => rename(doc) },
-      ...(doc.type === 'notebook' ? [{ icon: 'palette', label: 'Kaft en papier', action: () => changeCover(doc) }] : []),
-      { icon: doc.favorite ? 'star' : 'starFill', label: doc.favorite ? 'Uit favorieten' : 'Aan favorieten toevoegen', action: () => { doc.favorite = !doc.favorite; saveNow(doc); } },
-      { icon: 'download', label: 'Exporteren (.json)', action: () => downloadJSON(`${slug(doc.title)}.json`, doc) },
+      ...docMenuItems(doc),
+      '-',
+      { icon: 'trash', label: 'Naar prullenbak', danger: true, action: () => moveToTrash(doc) },
     ]);
   });
   $('tools').addEventListener('click', e => {
@@ -477,6 +692,7 @@ function bindEvents() {
   $('undoBtn').addEventListener('click', () => S.board.undo());
   $('redoBtn').addEventListener('click', () => S.board.redo());
   $('addPageBtn').addEventListener('click', () => S.board.addPage());
+  $('printBtn').addEventListener('click', () => { S.board.finishEdit(); flushSave(); printDoc(S.doc); });
   $('fitBtn').addEventListener('click', () => S.board.fit());
   $('zoomLabel').addEventListener('click', () => S.board.fit());
   $('zoomIn').addEventListener('click', () => S.board.zoomBy(1.25));
@@ -492,6 +708,13 @@ function bindEvents() {
   });
 
   document.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p' && S.doc) {
+      e.preventDefault();
+      S.board.finishEdit();
+      flushSave();
+      printDoc(S.doc);
+      return;
+    }
     if (!S.board || document.querySelector('dialog[open]')) return;
     if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
     if (S.board.key(e)) e.preventDefault();
@@ -502,7 +725,7 @@ function bindEvents() {
   addEventListener('pagehide', flushSave);
   addEventListener('online', () => store.sync());
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { flushSave(); store.sync(); }
+    if (document.hidden) { flushSave(); store.sync(); queueOcr(S.doc); }
     else store.sync();
   });
   setInterval(() => { if (!document.hidden) store.sync(); }, 60000);
@@ -512,8 +735,8 @@ function bindEvents() {
     if (e.detail.source !== 'remote') return;
     if (S.doc && e.detail.ids.includes(S.doc.id)) {
       const fresh = store.get(S.doc.id);
-      if (!fresh) {
-        toast('Dit document is op een ander toestel verwijderd');
+      if (!fresh || fresh.trashedAt) {
+        toast(fresh ? 'Dit document is op een ander toestel naar de prullenbak verplaatst' : 'Dit document is op een ander toestel verwijderd');
         location.hash = '';
       } else if (!S.board.busy() && !S.dirty) {
         S.doc = fresh;
@@ -527,8 +750,13 @@ function bindEvents() {
 
 shell();
 bindEvents();
+purgeOldTrash();
 renderStatus();
 route();
 store.sync();
 // Lettertypes kunnen na de eerste weergave binnenkomen; daarna klopt de maat van tekst pas.
 document.fonts?.ready.then(() => { if (!$('library').hidden) renderLibrary(); });
+
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}

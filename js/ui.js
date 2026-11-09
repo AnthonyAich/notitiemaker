@@ -34,6 +34,17 @@ const ICONS = {
   download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
   upload: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>',
   open: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  lasso: '<path d="M7 17.5C4.5 16.3 3 14.3 3 12c0-4.4 4-8 9-8s9 3.6 9 8-4 8-9 8c-1 0-2-.1-2.9-.4" stroke-dasharray="3 2.6"/><path d="M8.5 16.5a2 2 0 1 1-2.6 2.9c-.6-.7-.4-2 .5-2.6"/>',
+  shapes: '<path d="m4 20 6.5-6.5"/><path d="M10.5 18.5v-5h-5"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.2"/><circle cx="7" cy="7" r="3.5"/>',
+  arrow: '<path d="M5 19 19 5M10 5h9v9"/>',
+  line: '<path d="M5 19 19 5"/>',
+  rect: '<rect x="4" y="6" width="16" height="12" rx="1.5"/>',
+  ellipse: '<ellipse cx="12" cy="12" rx="9" ry="6.5"/>',
+  printer: '<path d="M7 9V3.5h10V9"/><rect x="3.5" y="9" width="17" height="8" rx="2"/><path d="M7 14h10v6.5H7z"/>',
+  history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3.5 4v4.5H8"/><path d="M12 7.5V12l3 2"/>',
+  restore: '<path d="M4 10a8 8 0 1 1 1.5 6"/><path d="M4 4v6h6"/>',
+  template: '<rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 9h17M9 9v11.5"/>',
+  wifiOff: '<path d="M2 8.5a15 15 0 0 1 4.5-2.8M10 5.1A15 15 0 0 1 22 8.5M5.5 12.5a10 10 0 0 1 3-1.9M15 11a10 10 0 0 1 3.5 1.5M9 16a5 5 0 0 1 6 0"/><circle cx="12" cy="19.5" r=".8" fill="currentColor"/><path d="M3 3l18 18"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.2 0 1.8-.9 1.4-2-.5-1.2.3-2.5 1.6-2.5H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1" fill="currentColor"/><circle cx="10" cy="7" r="1" fill="currentColor"/><circle cx="15" cy="7.5" r="1" fill="currentColor"/>',
 };
 

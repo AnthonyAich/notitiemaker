@@ -12,12 +12,21 @@ De app is gemaakt met gewone HTML, CSS en JavaScript, zonder build-stap. Je host
   - Dubbeltik om te bewerken. Elke regel wordt een bolletje, en twee spaties vooraan laten de regel inspringen.
   - Sleep om te verplaatsen. Met het blauwe bolletje rechtsonder pas je de grootte aan.
 - **Pen, markeerstift en gum** met kleuren en diktes. Werkt met de Apple Pencil: zodra je de Pencil gebruikt, verschuift je vinger het canvas in plaats van te tekenen.
+  - **Hou de pen even stil** aan het einde van een lijn: ze wordt een perfect rechte lijn, en een getekende rechthoek of cirkel wordt netjes.
+- **Vormen en pijlen**: pijl, lijn, rechthoek en ellips. Hou Shift ingedrukt voor een vierkant of cirkel.
+- **Lasso**: omcirkel handschrift (en blaadjes) om het te verplaatsen, groter of kleiner te maken (blauw bolletje), van kleur te veranderen, te dupliceren of te verwijderen.
+- **Sjablonen**: whiteboards als weekplanner, kanban, vergadering of mindmap; notebooks met Cornell- of weekplanner-papier.
 - **Tekstvakken** in handschriftstijl.
 - **Notebooks** met een kaft en gelinieerd, geruit, gestippeld of blanco papier. Nieuwe pagina's voeg je toe met de knop rechtsboven.
 - **Ongedaan maken / opnieuw** (⌘Z / ⇧⌘Z), een back-up als .json en het terugzetten ervan.
+- **Afdrukken of opslaan als PDF** (⌘P of het printer-icoon): een notebook wordt één A4 per pagina, een whiteboard past op één liggende A4. Kies in het afdrukvenster *Opslaan als PDF*.
+- **Prullenbak**: verwijderde documenten blijven 30 dagen bewaard en kun je terugzetten.
+- **Versiegeschiedenis** (documentmenu → Versiegeschiedenis): terug naar een eerdere versie. Versies worden bewaard op je toestel en, met de koppeling, ook in je Google Sheet.
+- **Zoeken in handschrift**: met de Google Sheets-koppeling wordt je handschrift herkend (Google tekstherkenning), zodat de zoekbalk het ook vindt.
+- **Werkt offline**: na het eerste bezoek opent de app ook zonder internet.
 - **Op het beginscherm zetten** van je iPad: Safari → Deel → *Zet op beginscherm*. De app opent dan schermvullend.
 
-Sneltoetsen: `V` selecteren, `P` pen, `H` markeerstift, `E` gum, `T` tekst, `N` notitieblaadje, `0` alles in beeld, `+`/`-` zoomen, `⌫` verwijderen, `⌘D` dupliceren, spatiebalk ingedrukt houden om te verschuiven.
+Sneltoetsen: `V` selecteren, `L` lasso, `P` pen, `H` markeerstift, `S` vormen, `E` gum, `T` tekst, `N` notitieblaadje, `⌘P` afdrukken, `0` alles in beeld, `+`/`-` zoomen, `⌫` verwijderen, `⌘D` dupliceren, spatiebalk ingedrukt houden om te verschuiven.
 
 ## Hoe wordt alles bewaard?
 
@@ -27,7 +36,8 @@ Sneltoetsen: `V` selecteren, `P` pen, `H` markeerstift, `E` gum, `T` tekst, `N` 
 In de Google Sheet verschijnen twee tabbladen:
 
 - **Documenten**: één rij per document. Kolom `data` (en de kolommen erna) bevat het volledige document als JSON. Pas die niet met de hand aan.
-- **Overzicht**: een leesbare lijst van al je blaadjes en regels, met een kolom *Gemarkeerd*. Handig om te filteren of af te drukken.
+- **Overzicht**: een leesbare lijst van al je blaadjes en regels (en herkend handschrift), met een kolom *Gemarkeerd*. Handig om te filteren of af te drukken.
+- **Versies**: hoogstens één kopie per uur per document, de laatste 30. Pas die niet met de hand aan.
 
 Bij een conflict wint de laatste wijziging: als je hetzelfde document tegelijk op twee toestellen bewerkt, blijft de versie die het laatst bewaard werd.
 
@@ -48,7 +58,18 @@ Bij een conflict wint de laatste wijziging: als je hetzelfde document tegelijk o
    - Klik op **Implementeren** en geef toestemming. Google waarschuwt dat de app niet geverifieerd is: kies *Geavanceerd → Ga naar … (onveilig)*. Dat is normaal, want het is je eigen script.
 6. Kopieer de **Web-app-URL**. Die eindigt op `/exec`.
 
-> Pas je `Code.gs` later aan? Kies dan **Implementeren → Implementaties beheren → ✏️ → Versie: Nieuwe versie**. Zo blijft de URL dezelfde.
+7. Voor **zoeken in handschrift**: klik links in de Apps Script-editor naast *Services* op **+**, kies **Drive API** en klik op **Toevoegen**.
+
+### Apps Script bijwerken
+
+Heb je al een koppeling, en komt er een nieuwe versie van `Code.gs`? Dan doe je dit:
+
+1. Open je Google Sheet → **Extensies → Apps Script**.
+2. Vervang de code door de nieuwe [`apps-script/Code.gs`](apps-script/Code.gs). **Zet je eigen `TOKEN` er weer in.**
+3. Zet de dienst **Drive API** aan als dat nog niet gebeurd is (stap 7 hierboven).
+4. Klik op **Implementeren → Implementaties beheren → ✏️ (bewerken) → Versie: Nieuwe versie → Implementeren**. Geef opnieuw toestemming als Google erom vraagt (er komen rechten bij voor Drive en Docs, voor de tekstherkenning).
+
+De URL blijft dezelfde; je hoeft in de app niets te veranderen.
 
 ### Stap 2: op GitHub Pages zetten
 
@@ -90,5 +111,10 @@ Open daarna <http://localhost:5173>. Dubbelklikken op `index.html` werkt niet, o
 | `js/board.js` | Het canvas: tekenen, blaadjes, tekst, zoomen en ongedaan maken |
 | `js/store.js` | Lokale opslag en synchronisatie met Google Sheets |
 | `js/model.js` | Kleuren, kaften en het datamodel |
-| `js/ink.js`, `js/thumb.js` | Pennenstreken en miniaturen |
+| `js/ink.js`, `js/thumb.js` | Pennenstreken, vormen, vormherkenning en miniaturen |
+| `js/print.js` | Afdrukken en PDF |
+| `js/versions.js` | Versiegeschiedenis op het toestel |
+| `js/ocr.js` | Handschrift omzetten naar afbeeldingen voor de tekstherkenning |
+| `js/fx.js` | Confetti |
+| `sw.js` | Service worker om offline te werken |
 | `apps-script/Code.gs` | De Google Apps Script-backend |

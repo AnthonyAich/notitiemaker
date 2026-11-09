@@ -28,7 +28,93 @@ export const COVERS = {
   lila: { bg: '#5f4b8b', accent: '#f3c6e0' },
 };
 
-export const PAPERS = { lijnen: 'Gelinieerd', ruitjes: 'Ruitjes', puntjes: 'Puntjes', blanco: 'Blanco' };
+export const PAPERS = {
+  lijnen: 'Gelinieerd', ruitjes: 'Ruitjes', puntjes: 'Puntjes', blanco: 'Blanco',
+  cornell: 'Cornell-notities', week: 'Weekplanner',
+};
+
+const DAYS = ['Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'];
+
+// Een weekplanner-pagina: zeven vakken plus een vak voor notities.
+export function weekPageSVG() {
+  const cells = [...DAYS, 'Notities'].map((d, i) => {
+    const x = 40 + (i % 2) * 380, y = 40 + Math.floor(i / 2) * 270;
+    return `<rect x="${x}" y="${y}" width="360" height="250" rx="14" fill="none" stroke="#c8d7ec" stroke-width="2"/>
+      <text x="${x + 18}" y="${y + 34}" font-family="Caveat, cursive" font-size="30" font-weight="700" fill="#5b7aa6">${d}</text>
+      <line x1="${x + 16}" y1="${y + 48}" x2="${x + 344}" y2="${y + 48}" stroke="#c8d7ec" stroke-width="1.5"/>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${PAGE_W} ${PAGE_H}" width="100%" height="100%" aria-hidden="true">${cells}</svg>`;
+}
+
+function weekDates() {
+  const now = new Date();
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+  return DAYS.map((d, i) => {
+    const t = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
+    return `${d} ${t.getDate()}/${t.getMonth() + 1}`;
+  });
+}
+
+const sticky = (x, y, color, title, lines = [], w = 260, h = 200) =>
+  ({ id: uid(), kind: 'sticky', x, y, w, h, color, title, lines: lines.map(t => ({ text: t, indent: 0, hl: false })) });
+const label = (x, y, text, size = 34) => ({ id: uid(), kind: 'text', x, y, text, size, color: '#1d1d1f' });
+const shape = (kind, a, b, color = '#1d1d1f', width = 3) => ({ id: uid(), tool: 'pen', shape: kind, color, width, points: [a, b] });
+
+// Sjablonen voor een nieuw whiteboard.
+export const BOARD_TEMPLATES = {
+  leeg: { label: 'Leeg', hint: 'Een leeg whiteboard', make: () => ({ items: [], strokes: [] }) },
+  week: {
+    label: 'Weekplanner',
+    hint: 'Een blaadje per dag van deze week',
+    make: () => {
+      const colors = ['geel', 'roze', 'blauw', 'groen', 'oranje', 'paars', 'geel'];
+      const items = weekDates().map((d, i) => sticky((i % 4) * 290, Math.floor(i / 4) * 260, colors[i], d));
+      items.push(sticky(870, 260, 'blauw', 'Deze week niet vergeten', []));
+      return { items, strokes: [] };
+    },
+  },
+  kanban: {
+    label: 'Kanban',
+    hint: 'To do, bezig en klaar: sleep blaadjes van kolom naar kolom',
+    make: () => {
+      const cols = ['To do', 'Bezig', 'Klaar'];
+      return {
+        items: [
+          ...cols.map((c, i) => label(i * 340 + 16, -10, c, 40)),
+          sticky(30, 60, 'geel', 'Taak', ['Sleep me naar Bezig'], 260, 120),
+          sticky(30, 210, 'roze', 'Nog een taak', [], 260, 120),
+        ],
+        strokes: cols.map((_, i) => shape('rect', [i * 340, -20], [i * 340 + 320, 760], '#b9c4d4', 2)),
+      };
+    },
+  },
+  vergadering: {
+    label: 'Vergadering',
+    hint: 'Agenda, notities, beslissingen en acties',
+    make: () => ({
+      items: [
+        label(0, -70, 'Vergadering ' + new Date().toLocaleDateString('nl-BE'), 40),
+        sticky(0, 0, 'geel', 'Agenda', ['Opening', 'Vorig verslag', 'Rondvraag']),
+        sticky(290, 0, 'blauw', 'Notities', [], 380, 420),
+        sticky(0, 230, 'groen', 'Beslissingen', []),
+        sticky(700, 0, 'roze', 'Acties', ['Wie · wat · tegen wanneer'], 280, 420),
+      ],
+      strokes: [],
+    }),
+  },
+  mindmap: {
+    label: 'Mindmap',
+    hint: 'Een centraal idee met vier takken',
+    make: () => {
+      const c = sticky(380, 260, 'oranje', 'Centraal idee', [], 240, 120);
+      const arms = [[0, 0, 'geel'], [760, 0, 'blauw'], [0, 520, 'groen'], [760, 520, 'paars']];
+      const items = [c, ...arms.map(([x, y, col], i) => sticky(x, y, col, `Idee ${i + 1}`, [], 240, 140))];
+      const strokes = [[370, 270, 250, 150], [630, 270, 750, 150], [370, 380, 250, 510], [630, 380, 750, 510]]
+        .map(([ax, ay, bx, by]) => shape('arrow', [ax, ay], [bx, by], '#5f6b7a', 3));
+      return { items, strokes };
+    },
+  },
+};
 
 export function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -41,7 +127,7 @@ export function newDoc(type, title, opts = {}) {
     // Pagina 0 is de kaft.
     return { ...base, cover: opts.cover || 'bordeaux', paper: opts.paper || 'lijnen', content: { pages: 3, items: [], strokes: [] } };
   }
-  return { ...base, content: { items: [], strokes: [] } };
+  return { ...base, content: (BOARD_TEMPLATES[opts.template] || BOARD_TEMPLATES.leeg).make() };
 }
 
 export function cloneDoc(doc) {
@@ -60,6 +146,7 @@ export function docText(doc) {
     if (it.kind === 'sticky') parts.push(it.title, ...(it.lines || []).map(l => l.text));
     else parts.push(it.text);
   }
+  if (doc.ocr?.text) parts.push(doc.ocr.text);
   return parts.join(' ').toLowerCase();
 }
 

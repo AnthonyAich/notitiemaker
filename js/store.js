@@ -33,6 +33,8 @@ class Store extends EventTarget {
     this.timer = null;
     this.running = null;
     this.again = false;
+    // Versie van het Apps Script (1 = zonder versies en handschriftherkenning).
+    this.api = 0;
     // Een ander tabblad met de app schreef naar localStorage: neem nieuwere documenten over.
     addEventListener('storage', e => {
       if (e.key !== DOCS_KEY || !e.newValue) return;
@@ -98,6 +100,7 @@ class Store extends EventTarget {
 
   setConfig({ url, token }) {
     this.config = { url, token };
+    this.api = 0;
     write(CFG_KEY, this.config);
     if (!url) return this.setStatus('off');
     this.sync();
@@ -158,7 +161,8 @@ class Store extends EventTarget {
     clearTimeout(this.timer);
     this.setStatus('syncing');
     try {
-      const { docs: remote } = await this.request('list');
+      const { docs: remote, api } = await this.request('list');
+      this.api = api || 1;
       const remoteById = Object.fromEntries(remote.map(r => [r.id, r]));
 
       const toFetch = remote
