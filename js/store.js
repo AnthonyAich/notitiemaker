@@ -1,9 +1,13 @@
-// Opslag: alles staat lokaal (localStorage) en wordt, als er een koppeling is,
-// gesynchroniseerd met een Google Sheet via een Apps Script web-app.
+// Opslag: de documenten van de ingelogde gebruiker staan lokaal (localStorage)
+// en worden gesynchroniseerd met de Google Sheet via de Apps Script web-app.
 // Conflicten: het meest recent gewijzigde document wint.
+import { API_URL } from './config.js';
 
-const DOCS_KEY = 'notitiemaker.docs.v1';
-const CFG_KEY = 'notitiemaker.sync.v1';
+const SESSION_KEY = 'notitiemaker.session.v1';
+const docsKey = username => `notitiemaker.docs.v2.${username}`;
+// Uit de versie zonder gebruikers: worden bij de eerste login overgenomen.
+const LEGACY_DOCS_KEY = 'notitiemaker.docs.v1';
+const LEGACY_CFG_KEY = 'notitiemaker.sync.v1';
 
 function read(key, fallback) {
   try {
@@ -24,20 +28,25 @@ function write(key, value) {
   }
 }
 
+function forget(key) {
+  try { localStorage.removeItem(key); } catch { /* niet erg */ }
+}
+
 class Store extends EventTarget {
   constructor() {
     super();
-    this.docs = read(DOCS_KEY, {});
-    this.config = { url: '', token: '', ...read(CFG_KEY, {}) };
-    this.status = { state: this.config.url ? 'idle' : 'off', message: '', at: 0 };
+    this.url = API_URL;
+    this.session = read(SESSION_KEY, null);
+    this.docs = this.session ? read(docsKey(this.session.username), {}) : {};
+    this.status = { state: this.session ? 'idle' : 'off', message: '', at: 0 };
     this.timer = null;
     this.running = null;
     this.again = false;
-    // Versie van het Apps Script (1 = zonder versies en handschriftherkenning).
+    // Versie van het Apps Script op de server.
     this.api = 0;
     // Een ander tabblad met de app schreef naar localStorage: neem nieuwere documenten over.
     addEventListener('storage', e => {
-      if (e.key !== DOCS_KEY || !e.newValue) return;
+      if (!this.session || e.key !== docsKey(this.session.username) || !e.newValue) return;
       let other;
       try { other = JSON.parse(e.newValue); } catch { return; }
       const ids = Object.keys(other).filter(id => other[id].updatedAt > (this.docs[id]?.updatedAt || 0));
@@ -45,6 +54,8 @@ class Store extends EventTarget {
       if (ids.length) this.emit('change', { ids, source: 'remote' });
     });
   }
+
+  // ---------- documenten ----------
 
   list() {
     return Object.values(this.docs).filter(d => !d.deleted);
@@ -74,7 +85,7 @@ class Store extends EventTarget {
   importDocs(list) {
     const ids = [];
     for (const d of list) {
-      if (!d?.id || !d.content || !d.type) continue;
+      if (!d?.id || !d.content || !d.type || d.deleted) continue;
       d.updatedAt = Date.now();
       this.docs[d.id] = d;
       ids.push(d.id);
@@ -86,7 +97,8 @@ class Store extends EventTarget {
   }
 
   persist() {
-    if (!write(DOCS_KEY, this.docs)) this.setStatus('error', 'De lokale opslag van je browser is vol.');
+    if (!this.session) return;
+    if (!write(docsKey(this.session.username), this.docs)) this.setStatus('error', 'De lokale opslag van je browser is vol.');
   }
 
   emit(type, detail) {
@@ -98,51 +110,91 @@ class Store extends EventTarget {
     this.emit('status', this.status);
   }
 
-  setConfig({ url, token }) {
-    this.config = { url, token };
-    this.api = 0;
-    write(CFG_KEY, this.config);
-    if (!url) return this.setStatus('off');
-    this.sync();
+  // ---------- account ----------
+
+  async login(username, password) {
+    const res = await this.request('login', { username, password });
+    this.api = res.api || 0;
+    this.session = { ...res.user, token: res.token };
+    write(SESSION_KEY, this.session);
+    this.docs = read(docsKey(this.session.username), {});
+    // Notities van vóór de accounts op dit toestel horen bij wie hier als eerste inlogt.
+    const legacy = read(LEGACY_DOCS_KEY, null);
+    if (legacy) {
+      for (const d of Object.values(legacy)) {
+        if (d.deleted || this.docs[d.id]) continue;
+        d.updatedAt = Date.now();
+        this.docs[d.id] = d;
+      }
+      this.persist();
+      forget(LEGACY_DOCS_KEY);
+      forget(LEGACY_CFG_KEY);
+    }
+    this.setStatus('idle');
+    this.emit('session');
+    await this.sync();
   }
 
+  // Afmelden. De lokale kopie wordt gewist, behalve als niet alles gesynchroniseerd is.
+  logout({ keepLocal = false } = {}) {
+    if (this.session && !keepLocal) forget(docsKey(this.session.username));
+    this.session = null;
+    this.docs = {};
+    this.api = 0;
+    clearTimeout(this.timer);
+    forget(SESSION_KEY);
+    this.setStatus('off');
+    this.emit('session');
+  }
+
+  async changePassword(oldPassword, newPassword) {
+    const res = await this.request('changePassword', { oldPassword, newPassword });
+    // Het wachtwoord wijzigen maakt oude sessies ongeldig; deze krijgt een nieuwe.
+    this.session = { ...this.session, token: res.token };
+    write(SESSION_KEY, this.session);
+  }
+
+  // ---------- server ----------
+
   schedule(delay = 1500) {
-    if (!this.config.url) return;
+    if (!this.session) return;
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.sync(), delay);
   }
 
-  async request(action, payload = {}, cfg = this.config) {
+  async request(action, payload = {}) {
     let res;
     try {
       // text/plain voorkomt een CORS-preflight, die Apps Script niet ondersteunt.
-      res = await fetch(cfg.url, {
+      res = await fetch(this.url, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action, token: cfg.token, ...payload }),
+        body: JSON.stringify({ action, token: this.session?.token, ...payload }),
       });
     } catch {
       throw new Error(navigator.onLine === false
         ? 'Je bent offline. Wijzigingen worden later gesynchroniseerd.'
-        : 'Kan de web-app niet bereiken. Klopt de URL en staat de toegang op "Iedereen"?');
+        : 'Kan de server niet bereiken. Probeer het straks opnieuw.');
     }
     if (!res.ok) throw new Error(`De server antwoordde met fout ${res.status}.`);
     let data;
     try {
       data = await res.json();
     } catch {
-      throw new Error('Onverwacht antwoord. Gebruik de URL die eindigt op /exec.');
+      throw new Error('Onverwacht antwoord van de server.');
     }
-    if (!data.ok) throw new Error(data.error || 'Onbekende fout');
+    if (!data.ok) {
+      if (data.auth && this.session) this.emit('auth', { message: data.error });
+      if (/Onbekende actie|Ongeldige token|TOKEN/.test(data.error || '')) {
+        throw new Error('De server gebruikt nog een oude versie van het Apps Script. Werk het bij (zie README).');
+      }
+      throw new Error(data.error || 'Onbekende fout');
+    }
     return data;
   }
 
-  test(url, token) {
-    return this.request('ping', {}, { url, token });
-  }
-
   sync() {
-    if (!this.config.url) return Promise.resolve();
+    if (!this.session) return Promise.resolve();
     if (this.running) {
       this.again = true;
       return this.running;

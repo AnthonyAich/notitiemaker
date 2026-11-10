@@ -444,3 +444,39 @@ h1 { font-size: 44px; letter-spacing: -.02em; margin: 14px 0 18px; }
 .tpl input:focus-visible + span { outline: 2px dashed var(--accent-2); outline-offset: 2px; }
 .warn-text { color: #ffcc66; font-size: 14px; line-height: 1.45; }
 .ocr-hit { display: inline-block; margin-top: 4px; font-size: 12px; color: var(--accent-2); }
+
+/* ---------- inloggen en account ---------- */
+
+.login {
+  height: 100%; display: grid; place-items: center; padding: 24px 16px;
+  background: radial-gradient(circle at 30% 20%, #1f3a63 0, transparent 55%), radial-gradient(circle at 80% 90%, #3b2a12 0, transparent 50%), var(--bg);
+}
+.login-card {
+  width: min(400px, 100%); padding: 28px;
+  background: var(--panel); border: 1px solid #333; border-radius: 22px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .5);
+}
+.login-card .brand { padding: 0 0 6px; }
+.login-card h1 { font-size: 28px; margin: 6px 0 8px; }
+.login-card .btn.primary { width: 100%; justify-content: center; margin-top: 4px; padding: 12px; }
+.login-card .err-text { min-height: 1.2em; margin: 4px 0; }
+.small { font-size: 13px; margin-top: 16px; }
+.sync-chip b { display: block; color: var(--text); font-weight: 600; margin-bottom: 1px; }
+.account-head { display: flex; align-items: center; gap: 14px; margin: 4px 0 8px; }
+.avatar { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #fff; font-weight: 700; font-size: 17px; flex: none; }
+.sync-line { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; margin-right: auto; }
+.badge { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: rgba(100, 181, 246, .18); color: var(--accent-2); vertical-align: 2px; }
+.badge.off { background: rgba(255, 107, 107, .15); color: #ff8a8a; }
+.users li { flex-wrap: wrap; }
+.users .v-main { flex: 1 1 180px; }
+.user-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.user-actions .btn { padding: 6px 10px; font-size: 13px; }
+.user-actions .ic { width: 16px; height: 16px; }
+.dlg-sub { font-size: 16px; margin: 0 0 4px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; align-items: end; }
+.check { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 14px; color: var(--muted); }
+.check input { width: 18px; height: 18px; }
+.cred { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: #141416; border: 1px solid #38383d; }
+.cred-title { font-size: 14px; color: #a5e6a8; margin-bottom: 6px; }
+.cred pre { margin: 0 0 10px; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; color: var(--text); user-select: text; -webkit-user-select: text; }
+@media (max-width: 520px) { .grid2 { grid-template-columns: 1fr; } }

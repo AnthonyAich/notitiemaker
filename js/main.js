@@ -35,7 +35,19 @@ const $ = id => document.getElementById(id);
 
 function shell() {
   document.getElementById('app').innerHTML = `
-  <section class="library" id="library">
+  <section class="login" id="login" hidden>
+    <form class="login-card" id="loginForm">
+      <div class="brand">${icon('logo')}<span>Notitiemaker</span></div>
+      <h1>Inloggen</h1>
+      <label class="field"><span>Gebruikersnaam</span><input name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
+      <label class="field"><span>Wachtwoord</span><input name="password" type="password" autocomplete="current-password" required></label>
+      <p class="err-text" id="loginErr" role="alert"></p>
+      <button class="btn primary" type="submit">Inloggen</button>
+      <p class="muted small">Nog geen account? Vraag de beheerder om er een voor je aan te maken. Je notities worden bewaard in de Google Sheet van de beheerder.</p>
+    </form>
+  </section>
+
+  <section class="library" id="library" hidden>
     <aside class="sidebar">
       <div class="brand">${icon('logo')}<span>Notitiemaker</span></div>
       <nav>
@@ -303,7 +315,7 @@ async function showVersions(doc) {
   flushSave();
   const local = (await listVersions(doc.id)).map(v => ({ ...v, src: 'local' }));
   let cloud = [], note = '';
-  if (store.config.url) {
+  if (store.session) {
     try {
       cloud = (await store.request('versions', { id: doc.id })).versions.map(v => ({ ...v, src: 'cloud' }));
     } catch (e) {
@@ -368,7 +380,7 @@ const ocrQueue = new Set();
 let ocrRunning = false;
 
 function ocrAvailable() {
-  return !!store.config.url && store.api >= 2;
+  return !!store.session && store.api >= 2;
 }
 
 function queueOcr(doc) {
@@ -436,14 +448,14 @@ function cardMenu(anchor, doc) {
 
 // ---------- tabbladen ----------
 
-const TABS_KEY = 'notitiemaker.tabs.v1';
+const tabsKey = () => `notitiemaker.tabs.v2.${store.session?.username}`;
 
 function loadTabs() {
-  try { return JSON.parse(localStorage.getItem(TABS_KEY)) || []; } catch { return []; }
+  try { return JSON.parse(localStorage.getItem(tabsKey())) || []; } catch { return []; }
 }
 
 function saveTabs() {
-  try { localStorage.setItem(TABS_KEY, JSON.stringify(S.tabs)); } catch { /* niet erg */ }
+  try { localStorage.setItem(tabsKey(), JSON.stringify(S.tabs)); } catch { /* niet erg */ }
 }
 
 function tabDocs() {
@@ -615,39 +627,69 @@ function renderSubbar() {
   $('subbar').innerHTML = h;
 }
 
-// ---------- synchronisatie ----------
+// ---------- account en synchronisatie ----------
 
-function renderStatus() {
+function statusInfo() {
   const { state, message, at } = store.status;
   const map = {
-    off: ['cloudOff', 'Alleen lokaal: koppel Google Sheets'],
-    idle: ['cloud', 'Google Sheets gekoppeld'],
+    off: ['cloudOff', 'Niet ingelogd'],
+    idle: ['cloud', 'Verbonden'],
     syncing: ['sync', 'Synchroniseren…'],
     ok: ['cloudOk', `Gesynchroniseerd ${new Date(at).toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' })}`],
     error: ['cloudErr', message || 'Synchronisatie mislukt'],
   };
   const [ic, label] = map[state];
-  const html = icon(ic, state === 'syncing' ? 'spin' : '');
-  $('syncChip').innerHTML = `${html}<span>${esc(label)}</span>`;
+  return { state, label, html: icon(ic, state === 'syncing' ? 'spin' : '') };
+}
+
+function renderStatus() {
+  const { state, label, html } = statusInfo();
+  const name = store.session?.name || '';
+  $('syncChip').innerHTML = `${html}<span>${name ? `<b>${esc(name)}</b>` : ''}${esc(label)}</span>`;
   $('syncChip').className = `sync-chip st-${state}`;
+  $('syncChip').title = 'Account en synchronisatie';
   $('edSync').innerHTML = html;
   $('edSync').className = `icon-btn ed-sync st-${state}`;
   $('edSync').title = label;
 }
 
-async function openSettings() {
-  const c = store.config;
-  const oldScript = c.url && store.api === 1;
+const SITE_URL = () => location.origin + location.pathname;
+
+function randomPassword() {
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  return Array.from(crypto.getRandomValues(new Uint32Array(10)), n => chars[n % chars.length]).join('');
+}
+
+function credentialsHTML(title, u, password) {
+  const text = `Notitiemaker\n${SITE_URL()}\nGebruikersnaam: ${u.username}\nWachtwoord: ${password}`;
+  return `<div class="cred">
+    <div class="cred-title">${esc(title)}</div>
+    <pre>${esc(text)}</pre>
+    <button type="button" class="btn ghost" data-copy="${esc(text)}">${icon('copy')} Kopiëren</button>
+  </div>`;
+}
+
+async function openAccount() {
+  const u = store.session;
+  if (!u) return showLogin();
+  const st = statusInfo();
+  const initials = (u.name || u.username).split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
   await dialog({
-    title: 'Google Sheets-koppeling',
-    submit: 'Opslaan',
+    title: 'Account',
+    submit: 'Sluiten',
+    cancel: '',
     body: `
-      <p class="muted">Je notities worden altijd op dit toestel bewaard. Koppel een Google Sheet om ze te bewaren in de cloud en te synchroniseren tussen toestellen. Hoe je dat instelt, staat in de README.</p>
-      <label class="field"><span>Web-app URL (Apps Script)</span><input name="url" type="url" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(c.url)}"></label>
-      <label class="field"><span>Token (staat bovenaan Code.gs)</span><input name="token" type="password" autocomplete="off" value="${esc(c.token)}"></label>
-      <div class="row"><button type="button" class="btn ghost" data-test>${icon('sync')} Verbinding testen</button><span class="test-out muted"></span></div>
-      ${store.status.state === 'error' ? `<p class="err-text">${esc(store.status.message)}</p>` : ''}
-      ${oldScript ? '<p class="warn-text">Je Apps Script is een oudere versie. Werk het bij (README → "Apps Script bijwerken") voor versies in de cloud en zoeken in handschrift.</p>' : ''}
+      <div class="account-head">
+        <span class="avatar">${esc(initials)}</span>
+        <div><div class="v-when">${esc(u.name)}</div><div class="v-meta">${esc(u.username)}${u.role === 'admin' ? ' · beheerder' : ''}</div></div>
+      </div>
+      <div class="row"><span class="sync-line st-${st.state}">${st.html} ${esc(st.label)}</span>
+        <button type="button" class="btn ghost" data-sync>${icon('sync')} Nu synchroniseren</button></div>
+      <div class="row">
+        <button type="button" class="btn ghost" data-pw>${icon('edit')} Wachtwoord wijzigen</button>
+        ${u.role === 'admin' ? `<button type="button" class="btn ghost" data-users>${icon('folder')} Gebruikers beheren</button>` : ''}
+        <button type="button" class="btn ghost" data-logout>${icon('open')} Afmelden</button>
+      </div>
       <hr>
       <p class="muted">Zoeken in handschrift: je pennenstreken worden met Google tekstherkenning gelezen zodra je een document sluit.</p>
       <div class="row"><button type="button" class="btn ghost" data-ocr${ocrAvailable() ? '' : ' disabled'}>${icon('search')} Alle handschrift nu herkennen</button><span class="ocr-out muted">${esc(S.ocrError)}</span></div>
@@ -657,19 +699,15 @@ async function openSettings() {
         <button type="button" class="btn ghost" data-import>${icon('upload')} Back-up terugzetten</button>
       </div>`,
     onOpen(d) {
-      const out = d.querySelector('.test-out');
-      d.querySelector('[data-test]').onclick = async () => {
-        out.textContent = 'Bezig…';
-        out.className = 'test-out muted';
-        try {
-          const res = await store.test(d.querySelector('[name=url]').value.trim(), d.querySelector('[name=token]').value.trim());
-          out.textContent = res.api >= 2 ? 'Verbinding werkt ✓' : 'Verbinding werkt ✓ (oudere scriptversie)';
-          out.className = 'test-out st-ok';
-        } catch (e) {
-          out.textContent = e.message;
-          out.className = 'test-out st-error';
-        }
+      d.querySelector('[data-sync]').onclick = async () => {
+        await store.sync();
+        const s2 = statusInfo();
+        d.querySelector('.sync-line').className = `sync-line st-${s2.state}`;
+        d.querySelector('.sync-line').innerHTML = `${s2.html} ${esc(s2.label)}`;
       };
+      d.querySelector('[data-pw]').onclick = () => { d.close(); changePassword(); };
+      d.querySelector('[data-users]')?.addEventListener('click', () => { d.close(); manageUsers(); });
+      d.querySelector('[data-logout]').onclick = () => { d.close(); logout(); };
       const ocrOut = d.querySelector('.ocr-out');
       d.querySelector('[data-ocr]').onclick = async () => {
         const todo = store.list().filter(needsOcr);
@@ -683,14 +721,194 @@ async function openSettings() {
       d.querySelector('[data-export]').onclick = () => downloadJSON(`notitiemaker-backup-${new Date().toISOString().slice(0, 10)}.json`, store.list());
       d.querySelector('[data-import]').onclick = () => { d.close(); importFile(); };
     },
-  }).then(res => {
-    if (res) store.setConfig({ url: res.url.trim(), token: res.token.trim() });
   });
+}
+
+async function changePassword() {
+  const res = await dialog({
+    title: 'Wachtwoord wijzigen',
+    submit: 'Opslaan',
+    body: `
+      <label class="field"><span>Huidig wachtwoord</span><input name="old" type="password" autocomplete="current-password" required autofocus></label>
+      <label class="field"><span>Nieuw wachtwoord (minstens 6 tekens)</span><input name="pw" type="password" autocomplete="new-password" minlength="6" required></label>
+      <label class="field"><span>Nieuw wachtwoord herhalen</span><input name="pw2" type="password" autocomplete="new-password" minlength="6" required></label>`,
+  });
+  if (!res) return;
+  if (res.pw !== res.pw2) return toast('De nieuwe wachtwoorden zijn niet hetzelfde', 'err');
+  try {
+    await store.changePassword(res.old, res.pw);
+    toast('Je wachtwoord is gewijzigd');
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+async function logout() {
+  closeEditor();
+  await store.sync();
+  if (store.status.state !== 'ok') {
+    const ok = await confirmDialog('Niet alles is gesynchroniseerd',
+      'Als je nu afmeldt, blijven je laatste wijzigingen op dit toestel bewaard en worden ze gesynchroniseerd zodra je opnieuw inlogt.', 'Toch afmelden');
+    if (!ok) return;
+    store.logout({ keepLocal: true });
+  } else {
+    store.logout();
+  }
+}
+
+// Beheer van gebruikers (alleen voor beheerders).
+async function manageUsers() {
+  let users;
+  try {
+    users = (await store.request('users')).users;
+  } catch (e) {
+    return toast(e.message, 'err');
+  }
+  const listHTML = () => users.map(u => `
+    <li>
+      <div class="v-main">
+        <div class="v-when">${esc(u.name)}${u.role === 'admin' ? ' <span class="badge">beheerder</span>' : ''}${u.active ? '' : ' <span class="badge off">uitgeschakeld</span>'}</div>
+        <div class="v-meta">${esc(u.username)}</div>
+      </div>
+      <div class="user-actions">
+        <button type="button" class="btn ghost" data-act="pw" data-u="${esc(u.username)}" title="Nieuw wachtwoord">${icon('restore')}<span>Wachtwoord</span></button>
+        <button type="button" class="btn ghost" data-act="role" data-u="${esc(u.username)}">${u.role === 'admin' ? 'Geen beheerder' : 'Beheerder'}</button>
+        <button type="button" class="btn ghost" data-act="active" data-u="${esc(u.username)}">${u.active ? 'Uitschakelen' : 'Inschakelen'}</button>
+      </div>
+    </li>`).join('');
+
+  await dialog({
+    title: 'Gebruikers',
+    submit: 'Sluiten',
+    cancel: '',
+    body: `
+      <ul class="versions users">${listHTML()}</ul>
+      <hr>
+      <h3 class="dlg-sub">Nieuwe gebruiker</h3>
+      <div class="grid2">
+        <label class="field"><span>Naam</span><input data-f="name" placeholder="bv. Yvonne Peeters"></label>
+        <label class="field"><span>Gebruikersnaam</span><input data-f="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="bv. yvonne"></label>
+        <label class="field"><span>Wachtwoord</span><input data-f="password" value="${randomPassword()}" autocomplete="off"></label>
+        <label class="check"><input type="checkbox" data-f="admin"> Ook beheerder</label>
+      </div>
+      <div class="row"><button type="button" class="btn primary" data-add>${icon('plus')} Toevoegen</button></div>
+      <div class="user-out"></div>`,
+    onOpen(d) {
+      const f = k => d.querySelector(`[data-f="${k}"]`);
+      const out = d.querySelector('.user-out');
+      const list = d.querySelector('.users');
+      const refresh = async () => {
+        users = (await store.request('users')).users;
+        list.innerHTML = listHTML();
+      };
+      let typedUsername = false;
+      f('username').addEventListener('input', () => { typedUsername = true; });
+      f('name').addEventListener('input', () => {
+        if (!typedUsername) {
+          f('username').value = f('name').value.split(/\s+/)[0].toLowerCase()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9._-]/g, '');
+        }
+      });
+      d.addEventListener('click', async e => {
+        const copy = e.target.closest('[data-copy]');
+        if (copy) {
+          try { await navigator.clipboard.writeText(copy.dataset.copy); copy.lastChild.textContent = ' Gekopieerd ✓'; } catch { /* selecteer het dan zelf */ }
+          return;
+        }
+        if (e.target.closest('[data-add]')) {
+          const req = {
+            isNew: true,
+            username: f('username').value.trim().toLowerCase(),
+            name: f('name').value.trim() || f('username').value.trim(),
+            password: f('password').value.trim(),
+            role: f('admin').checked ? 'admin' : 'user',
+          };
+          try {
+            const { user } = await store.request('saveUser', req);
+            out.innerHTML = credentialsHTML(`Account voor ${user.name} aangemaakt ✓ Geef deze gegevens door:`, user, req.password);
+            out.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            f('name').value = f('username').value = '';
+            f('password').value = randomPassword();
+            f('admin').checked = false;
+            typedUsername = false;
+            await refresh();
+          } catch (err) {
+            out.innerHTML = `<p class="err-text">${esc(err.message)}</p>`;
+          }
+          return;
+        }
+        const b = e.target.closest('[data-act]');
+        if (!b) return;
+        const u = users.find(x => x.username === b.dataset.u);
+        try {
+          if (b.dataset.act === 'pw') {
+            const password = randomPassword();
+            await store.request('saveUser', { username: u.username, password });
+            out.innerHTML = credentialsHTML(`Nieuw wachtwoord voor ${u.name} ✓ Oude sessies zijn afgemeld.`, u, password);
+            out.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          } else if (b.dataset.act === 'role') {
+            await store.request('saveUser', { username: u.username, role: u.role === 'admin' ? 'user' : 'admin' });
+            out.innerHTML = '';
+          } else {
+            await store.request('saveUser', { username: u.username, active: !u.active });
+            out.innerHTML = '';
+          }
+          await refresh();
+        } catch (err) {
+          out.innerHTML = `<p class="err-text">${esc(err.message)}</p>`;
+        }
+      });
+    },
+  });
+}
+
+// ---------- inloggen ----------
+
+const LAST_USER_KEY = 'notitiemaker.lastuser';
+
+function showLogin(message = '') {
+  closeEditor();
+  closeMenu();
+  $('library').hidden = true;
+  $('editor').hidden = true;
+  $('login').hidden = false;
+  document.title = 'Inloggen · Notitiemaker';
+  $('loginErr').textContent = message;
+  const form = $('loginForm');
+  try { form.username.value ||= localStorage.getItem(LAST_USER_KEY) || ''; } catch { /* niet erg */ }
+  (form.username.value ? form.password : form.username).focus();
+}
+
+async function submitLogin(e) {
+  e.preventDefault();
+  const form = $('loginForm');
+  const btn = form.querySelector('button[type=submit]');
+  btn.disabled = true;
+  btn.textContent = 'Bezig…';
+  $('loginErr').textContent = '';
+  try {
+    await store.login(form.username.value, form.password.value);
+    try { localStorage.setItem(LAST_USER_KEY, store.session.username); } catch { /* niet erg */ }
+    form.password.value = '';
+  } catch (err) {
+    $('loginErr').textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Inloggen';
+  }
+}
+
+function startSession() {
+  $('login').hidden = true;
+  S.tabs = loadTabs();
+  purgeOldTrash();
+  route();
 }
 
 // ---------- routes en events ----------
 
 function route() {
+  if (!store.session) return showLogin();
   const m = location.hash.match(/^#\/d\/(.+)$/);
   const doc = m && store.get(decodeURIComponent(m[1]));
   if (doc && !doc.trashedAt) showEditor(doc);
@@ -733,8 +951,9 @@ function bindEvents() {
   $('grid').addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.classList.contains('thumb')) e.target.click();
   });
-  $('syncChip').addEventListener('click', openSettings);
-  $('edSync').addEventListener('click', openSettings);
+  $('syncChip').addEventListener('click', openAccount);
+  $('edSync').addEventListener('click', openAccount);
+  $('loginForm').addEventListener('submit', submitLogin);
 
   $('homeBtn').addEventListener('click', () => { location.hash = ''; });
   $('tabList').addEventListener('click', e => {
@@ -801,6 +1020,17 @@ function bindEvents() {
   setInterval(() => { if (!document.hidden) store.sync(); }, 60000);
 
   store.addEventListener('status', renderStatus);
+  store.addEventListener('session', () => {
+    renderStatus();
+    if (store.session) startSession();
+    else showLogin();
+  });
+  store.addEventListener('auth', e => {
+    // Sessie verlopen of account uitgeschakeld: lokale wijzigingen blijven bewaard.
+    flushSave();
+    store.logout({ keepLocal: true });
+    showLogin(e.detail.message);
+  });
   store.addEventListener('change', e => {
     if (e.detail.source !== 'remote') return;
     if (S.doc && e.detail.ids.includes(S.doc.id)) {
@@ -819,12 +1049,14 @@ function bindEvents() {
 }
 
 shell();
-S.tabs = loadTabs();
 bindEvents();
-purgeOldTrash();
 renderStatus();
-route();
-store.sync();
+if (store.session) {
+  startSession();
+  store.sync();
+} else {
+  showLogin();
+}
 // Lettertypes kunnen na de eerste weergave binnenkomen; daarna klopt de maat van tekst pas.
 document.fonts?.ready.then(() => { if (!$('library').hidden) renderLibrary(); });
 
