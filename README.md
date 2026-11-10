@@ -17,6 +17,7 @@ De app is gemaakt met gewone HTML, CSS en JavaScript, zonder build-stap. Je host
 - **Lasso**: omcirkel handschrift (en blaadjes) om het te verplaatsen, groter of kleiner te maken (blauw bolletje), van kleur te veranderen, te dupliceren of te verwijderen.
 - **Sjablonen**: whiteboards als weekplanner, kanban, vergadering of mindmap; notebooks met Cornell- of weekplanner-papier.
 - **Tekstvakken** in handschriftstijl.
+- **Tabbladen**: open meerdere notebooks en whiteboards tegelijk. Met + open je een nieuw of bestaand document, met × sluit je een tabblad.
 - **Notebooks** met een kaft en gelinieerd, geruit, gestippeld of blanco papier. Nieuwe pagina's voeg je toe met de knop rechtsboven.
 - **Ongedaan maken / opnieuw** (⌘Z / ⇧⌘Z), een back-up als .json en het terugzetten ervan.
 - **Afdrukken of opslaan als PDF** (⌘P of het printer-icoon): een notebook wordt één A4 per pagina, een whiteboard past op één liggende A4. Kies in het afdrukvenster *Opslaan als PDF*.

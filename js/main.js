@@ -30,7 +30,7 @@ const FILTERS = {
   trash: { title: 'Prullenbak', icon: 'trash', test: d => !!d.trashedAt },
 };
 
-const S = { filter: 'all', query: '', sort: 'updated', board: null, doc: null, saveTimer: null, dirty: false, ocrError: '' };
+const S = { filter: 'all', query: '', sort: 'updated', board: null, doc: null, saveTimer: null, dirty: false, ocrError: '', tabs: [], lastTab: null };
 const $ = id => document.getElementById(id);
 
 function shell() {
@@ -65,7 +65,8 @@ function shell() {
     <header class="ed-top">
       <div class="ed-tabs">
         <button class="icon-btn" id="homeBtn" title="Terug naar documenten">${icon('home')}</button>
-        <button class="ed-title" id="docTitle" title="Documentmenu"></button>
+        <div class="ed-tablist" id="tabList" role="tablist"></div>
+        <button class="icon-btn" id="newTabBtn" title="Nieuw tabblad" aria-label="Nieuw tabblad">${icon('plus')}</button>
         <button class="icon-btn ed-sync" id="edSync" title="Synchronisatie"></button>
       </div>
       <div class="ed-tools">
@@ -258,7 +259,7 @@ function importFile() {
 // ---------- prullenbak ----------
 
 function moveToTrash(doc) {
-  if (S.doc?.id === doc.id) { location.hash = ''; }
+  closeTab(doc.id);
   doc.trashedAt = Date.now();
   store.save(doc);
   renderLibrary();
@@ -354,7 +355,7 @@ async function restoreVersion(doc, v) {
   store.save(doc);
   if (live) {
     S.board.load(doc);
-    $('docTitle').innerHTML = `<span>${esc(doc.title)}</span>${icon('chevron')}`;
+    renderTabs();
   } else {
     renderLibrary();
   }
@@ -433,6 +434,61 @@ function cardMenu(anchor, doc) {
   ]);
 }
 
+// ---------- tabbladen ----------
+
+const TABS_KEY = 'notitiemaker.tabs.v1';
+
+function loadTabs() {
+  try { return JSON.parse(localStorage.getItem(TABS_KEY)) || []; } catch { return []; }
+}
+
+function saveTabs() {
+  try { localStorage.setItem(TABS_KEY, JSON.stringify(S.tabs)); } catch { /* niet erg */ }
+}
+
+function tabDocs() {
+  // Verwijderde of weggegooide documenten verdwijnen vanzelf uit de tabbladen.
+  S.tabs = S.tabs.filter(id => { const d = store.get(id); return d && !d.trashedAt; });
+  return S.tabs.map(id => store.get(id));
+}
+
+function renderTabs() {
+  $('tabList').innerHTML = tabDocs().map(d => {
+    const on = d.id === S.doc?.id;
+    return `<div class="ed-tab${on ? ' on' : ''}" data-id="${d.id}" role="tab" aria-selected="${on}" title="${esc(d.title)}">
+      <button class="ed-tab-title">${icon(d.type === 'notebook' ? 'book' : 'board', 'type')}<span>${esc(d.title)}</span>${on ? icon('chevron') : ''}</button>
+      <button class="ed-tab-close" title="Tabblad sluiten" aria-label="Sluit ${esc(d.title)}">${icon('x')}</button>
+    </div>`;
+  }).join('');
+  $('tabList').querySelector('.ed-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function closeTab(id) {
+  const i = S.tabs.indexOf(id);
+  if (i < 0) return;
+  S.tabs.splice(i, 1);
+  saveTabs();
+  if (S.doc?.id === id) {
+    const next = S.tabs[i] || S.tabs[i - 1];
+    if (next) openDoc(next);
+    else location.hash = '';
+  } else {
+    renderTabs();
+  }
+}
+
+function newTabMenu(anchor) {
+  const recent = store.list()
+    .filter(d => !d.trashedAt && !S.tabs.includes(d.id))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 8);
+  popMenu(anchor, [
+    { icon: 'book', label: 'Nieuw notebook', action: askNotebook },
+    { icon: 'board', label: 'Nieuw whiteboard', action: askBoard },
+    ...(recent.length ? ['-', ...recent.map(d => ({ icon: d.type === 'notebook' ? 'book' : 'board', label: d.title, action: () => openDoc(d.id) }))] : []),
+  ]);
+}
+
 // ---------- editor ----------
 
 function openDoc(id) {
@@ -442,7 +498,7 @@ function openDoc(id) {
 function saveNow(doc) {
   store.save(doc);
   if (S.doc === doc) {
-    $('docTitle').innerHTML = `<span>${esc(doc.title)}</span>${icon('chevron')}`;
+    renderTabs();
     S.board.renderPages();
   } else {
     renderLibrary();
@@ -469,11 +525,15 @@ function showEditor(doc) {
   if (S.doc?.id === doc.id) return;
   closeEditor();
   S.doc = doc;
+  if (!S.tabs.includes(doc.id)) S.tabs.splice(S.tabs.indexOf(S.lastTab) + 1, 0, doc.id);
+  S.lastTab = doc.id;
+  saveTabs();
+  renderTabs();
   snapshot(doc, 5);
   $('library').hidden = true;
   $('editor').hidden = false;
   $('editor').classList.toggle('is-notebook', doc.type === 'notebook');
-  $('docTitle').innerHTML = `<span>${esc(doc.title)}</span>${icon('chevron')}`;
+  renderTabs();
   $('addPageBtn').hidden = doc.type !== 'notebook';
   document.title = `${doc.title} · Notitiemaker`;
   S.board = new Board($('boardHost'), doc, {
@@ -677,14 +737,24 @@ function bindEvents() {
   $('edSync').addEventListener('click', openSettings);
 
   $('homeBtn').addEventListener('click', () => { location.hash = ''; });
-  $('docTitle').addEventListener('click', e => {
+  $('tabList').addEventListener('click', e => {
+    const tab = e.target.closest('.ed-tab');
+    if (!tab) return;
+    if (e.target.closest('.ed-tab-close')) return closeTab(tab.dataset.id);
+    if (tab.dataset.id !== S.doc?.id) return openDoc(tab.dataset.id);
     const doc = S.doc;
-    popMenu(e.currentTarget, [
+    popMenu(tab, [
       ...docMenuItems(doc),
       '-',
       { icon: 'trash', label: 'Naar prullenbak', danger: true, action: () => moveToTrash(doc) },
     ]);
   });
+  // Middelste muisknop sluit een tabblad, zoals in een browser.
+  $('tabList').addEventListener('auxclick', e => {
+    const tab = e.target.closest('.ed-tab');
+    if (tab && e.button === 1) { e.preventDefault(); closeTab(tab.dataset.id); }
+  });
+  $('newTabBtn').addEventListener('click', e => newTabMenu(e.currentTarget));
   $('tools').addEventListener('click', e => {
     const b = e.target.closest('[data-tool]');
     if (b) setTool(b.dataset.tool);
@@ -741,7 +811,7 @@ function bindEvents() {
       } else if (!S.board.busy() && !S.dirty) {
         S.doc = fresh;
         S.board.load(fresh);
-        $('docTitle').innerHTML = `<span>${esc(fresh.title)}</span>${icon('chevron')}`;
+        renderTabs();
       }
     }
     if (!$('library').hidden) renderLibrary();
@@ -749,6 +819,7 @@ function bindEvents() {
 }
 
 shell();
+S.tabs = loadTabs();
 bindEvents();
 purgeOldTrash();
 renderStatus();

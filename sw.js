@@ -2,7 +2,7 @@
 // Eigen bestanden: eerst het netwerk (altijd de nieuwste versie), anders de kopie.
 // Lettertypes van Google: eerst de kopie.
 
-const CACHE = 'notitiemaker-v2';
+const CACHE = 'notitiemaker-v3';
 const SHELL = [
   './', 'index.html', 'css/styles.css', 'manifest.webmanifest', 'icon.svg', 'icon-180.png',
   'js/main.js', 'js/board.js', 'js/store.js', 'js/model.js', 'js/ink.js', 'js/thumb.js',
@@ -10,7 +10,7 @@ const SHELL = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -28,7 +28,9 @@ function withTimeout(promise, ms) {
 async function networkFirst(req) {
   const cache = await caches.open(CACHE);
   try {
-    const res = await withTimeout(fetch(req), 4000);
+    // no-cache: altijd bij de server navragen of er een nieuwere versie is.
+    const fresh = req.mode === 'navigate' ? fetch(req.url, { cache: 'no-cache' }) : fetch(req, { cache: 'no-cache' });
+    const res = await withTimeout(fresh, 4000);
     if (res.ok) cache.put(req, res.clone());
     return res;
   } catch {
