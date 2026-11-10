@@ -891,6 +891,14 @@ async function manageUsers() {
             if (u.username === store.session.username) store.renamed(user);
             out.innerHTML = `<p class="st-ok">Opgeslagen ✓ ${esc(user.name)} logt voortaan in als <b>${esc(user.username)}</b>.</p>`;
           } else if (b.dataset.act === 'pw') {
+            // Je eigen wachtwoord wijzig je met je huidige wachtwoord; anders word je afgemeld.
+            if (u.id === store.session.id || u.username === store.session.username) {
+              d.close();
+              return changePassword();
+            }
+            if (!await confirmDialog(`Nieuw wachtwoord voor ${u.name}?`,
+              `Er wordt een nieuw wachtwoord gemaakt. ${u.name} wordt overal afgemeld en kan alleen nog inloggen met het nieuwe wachtwoord.`,
+              'Nieuw wachtwoord maken')) return;
             const password = randomPassword();
             await store.request('saveUser', { username: u.username, password });
             out.innerHTML = credentialsHTML(`Nieuw wachtwoord voor ${u.name} ✓ Oude sessies zijn afgemeld.`, u, password);
@@ -899,6 +907,9 @@ async function manageUsers() {
             await store.request('saveUser', { username: u.username, role: u.role === 'admin' ? 'user' : 'admin' });
             out.innerHTML = '';
           } else {
+            if (u.active && !await confirmDialog(`${u.name} uitschakelen?`,
+              `${u.name} wordt meteen afgemeld en kan niet meer inloggen. De documenten blijven bewaard; je kunt het account later weer inschakelen.`,
+              'Uitschakelen')) return;
             await store.request('saveUser', { username: u.username, active: !u.active });
             out.innerHTML = '';
           }
