@@ -7,7 +7,8 @@
  * Tabbladen (worden vanzelf aangemaakt):
  * - "Gebruikers": één rij per gebruiker. Een nieuw wachtwoord mag je hier gewoon
  *   intypen; het script vervangt het meteen door een versleutelde versie.
- * - "Documenten": één rij per document, met de eigenaar in de eerste kolom.
+ *   De gebruikersnaam mag je wijzigen; de kolom "id" laat je best met rust.
+ * - "Documenten": één rij per document, met de id van de eigenaar in de eerste kolom.
  *   Het document staat als JSON vanaf de kolom "data" (een cel mag max. 50.000 tekens).
  * - "Versies": hoogstens één kopie per uur per document, de laatste 30.
  * - "Overzicht": leesbare lijst van alle notitieblaadjes en hun regels.
@@ -16,7 +17,7 @@
  * de dienst "Drive API" aan.
  */
 
-const API_VERSION = 3;
+const API_VERSION = 4;
 const USERS_NAME = 'Gebruikers';
 const SHEET_NAME = 'Documenten';
 const VERSIONS_NAME = 'Versies';
@@ -27,7 +28,9 @@ const VERSION_EVERY_MS = 60 * 60 * 1000;
 const VERSIONS_KEEP = 30;
 const HASH_ROUNDS = 200;
 
-const USER_HEADER = ['gebruikersnaam', 'naam', 'wachtwoord', 'rol', 'actief', 'aangemaakt'];
+// De kolom "id" is een vaste code per gebruiker: documenten horen bij die code,
+// zodat je een gebruikersnaam gerust kunt wijzigen.
+const USER_HEADER = ['gebruikersnaam', 'naam', 'wachtwoord', 'rol', 'actief', 'aangemaakt', 'id'];
 const DOC_HEADER = ['eigenaar', 'id', 'type', 'titel', 'favoriet', 'gewijzigd (ms)', 'verwijderd', 'gewijzigd op', 'data'];
 const DOC_DATA = 8; // index (vanaf 0) van de eerste datakolom
 const VERSION_HEADER = ['eigenaar', 'id', 'bewaard (ms)', 'bewaard op', 'titel', 'data'];
@@ -52,7 +55,7 @@ function doPost(e) {
     if (req.action === 'login') return out(login_(req.username, req.password));
 
     const user = auth_(req.token);
-    const me = user.username;
+    const me = user.id;
     switch (req.action) {
       case 'me': return out({ ok: true, api: API_VERSION, user: publicUser_(user) });
       case 'list': return out({ ok: true, api: API_VERSION, docs: listDocs_(me) });
@@ -64,6 +67,8 @@ function doPost(e) {
       case 'changePassword': return out(changePassword_(user, req.oldPassword, req.newPassword));
       case 'users': requireAdmin_(user); return out({ ok: true, users: users_().map(publicUser_) });
       case 'saveUser': requireAdmin_(user); return out({ ok: true, user: saveUser_(user, req) });
+      case 'orphans': requireAdmin_(user); return out({ ok: true, orphans: orphans_() });
+      case 'assignOrphans': requireAdmin_(user); return out({ ok: true, moved: assignOrphans_(req.from, req.to) });
       default: throw new Error('Onbekende actie: ' + req.action);
     }
   } catch (err) {
@@ -95,7 +100,8 @@ function sheetWith_(name, header) {
 }
 
 function ensureSheets_() {
-  sheetWith_(USERS_NAME, USER_HEADER);
+  const users = sheetWith_(USERS_NAME, USER_HEADER);
+  if (users.getRange(1, 7).getDisplayValue() !== 'id') users.getRange(1, 7).setValue('id').setFontWeight('bold');
   // Tabbladen uit de versie zonder gebruikers krijgen vooraan een kolom "eigenaar".
   [[SHEET_NAME, DOC_HEADER], [VERSIONS_NAME, VERSION_HEADER]].forEach(([name, header]) => {
     const sh = sheetWith_(name, header);
@@ -104,6 +110,31 @@ function ensureSheets_() {
       sh.getRange(1, 1).setValue('eigenaar').setFontWeight('bold');
     }
   });
+  migrateOwnersToIds_();
+}
+
+// Eenmalig: eigenaars die nog als gebruikersnaam genoteerd staan, omzetten naar de vaste id.
+function migrateOwnersToIds_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('OWNERS_AS_IDS')) return;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    if (props.getProperty('OWNERS_AS_IDS')) return;
+    const byName = {};
+    users_().forEach(u => { byName[u.username] = u.id; });
+    [SHEET_NAME, VERSIONS_NAME].forEach(name => {
+      const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+      const rows = allRows_(sh, 1);
+      rows.forEach((r, i) => {
+        const id = byName[String(r[0]).trim().toLowerCase()];
+        if (id) sh.getRange(i + 2, 1).setNumberFormat('@').setValue(id);
+      });
+    });
+    props.setProperty('OWNERS_AS_IDS', '1');
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function allRows_(sh, width) {
@@ -164,6 +195,7 @@ function users_() {
   return allRows_(sh, USER_HEADER.length).map((r, i) => {
     const u = {
       row: i + 2,
+      id: String(r[6]).trim(),
       username: String(r[0]).trim().toLowerCase(),
       name: String(r[1]).trim(),
       hash: r[2],
@@ -175,8 +207,20 @@ function users_() {
       sh.getRange(u.row, 3).setNumberFormat('@').setValue(u.hash);
       if (!r[5]) sh.getRange(u.row, 6).setValue(new Date());
     }
+    if (u.username && !u.id) {
+      u.id = newUserId_();
+      sh.getRange(u.row, 7).setNumberFormat('@').setValue(u.id);
+    }
     return u;
   }).filter(u => u.username);
+}
+
+function newUserId_() {
+  return 'u' + Utilities.getUuid().replace(/-/g, '').slice(0, 12);
+}
+
+function findUserById_(id) {
+  return users_().filter(u => u.id === id)[0] || null;
 }
 
 function findUser_(username) {
@@ -187,11 +231,11 @@ function findUser_(username) {
 // De eerste beheerder krijgt de documenten uit de tijd zonder gebruikers.
 function firstAdmin_() {
   const a = users_().filter(u => u.role === 'admin' && u.active)[0];
-  return a ? a.username : '';
+  return a ? a.id : '';
 }
 
 function publicUser_(u) {
-  return { username: u.username, name: u.name || u.username, role: u.role, active: u.active };
+  return { id: u.id, username: u.username, name: u.name || u.username, role: u.role, active: u.active };
 }
 
 function requireAdmin_(user) {
@@ -200,7 +244,7 @@ function requireAdmin_(user) {
 
 function makeToken_(user) {
   const payload = Utilities.base64EncodeWebSafe(JSON.stringify({
-    u: user.username,
+    i: user.id,
     e: Date.now() + SESSION_DAYS * 86400000,
     v: user.hash.slice(-10), // een nieuw wachtwoord maakt oude sessies ongeldig
   }));
@@ -215,7 +259,7 @@ function auth_(token) {
   if (sig !== parts[1]) throw authError_('Je sessie is ongeldig. Log opnieuw in.');
   const p = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString());
   if (p.e < Date.now()) throw authError_('Je sessie is verlopen. Log opnieuw in.');
-  const user = findUser_(p.u);
+  const user = p.i ? findUserById_(p.i) : findUser_(p.u);
   if (!user || !user.active || user.hash.slice(-10) !== p.v) throw authError_('Je sessie is niet meer geldig. Log opnieuw in.');
   return user;
 }
@@ -259,21 +303,28 @@ function saveUser_(admin, req) {
     if (req.isNew) {
       if (user) throw new Error('Die gebruikersnaam bestaat al.');
       validPassword_(req.password);
-      user = { row: Math.max(sh.getLastRow(), 1) + 1, username: username, name: '', role: 'user', active: true, hash: '' };
+      user = { row: Math.max(sh.getLastRow(), 1) + 1, id: newUserId_(), username: username, name: '', role: 'user', active: true, hash: '' };
       sh.getRange(user.row, 6).setValue(new Date());
     }
     if (!user) throw new Error('Gebruiker niet gevonden.');
+    if (req.newUsername != null && String(req.newUsername).trim().toLowerCase() !== user.username) {
+      const renamed = String(req.newUsername).trim().toLowerCase();
+      if (!/^[a-z0-9._-]{2,30}$/.test(renamed)) throw new Error('Een gebruikersnaam heeft 2 tot 30 tekens: kleine letters, cijfers, punt, - of _.');
+      if (findUser_(renamed)) throw new Error('Die gebruikersnaam bestaat al.');
+      user.username = renamed;
+    }
     if (req.name != null) user.name = String(req.name).trim();
     if (req.password) { validPassword_(req.password); user.hash = newHash_(req.password); }
     if (req.role != null) user.role = req.role === 'admin' ? 'admin' : 'user';
     if (req.active != null) user.active = !!req.active;
 
     // Er moet altijd minstens één actieve beheerder overblijven.
-    const admins = users_().filter(u => u.username !== user.username && u.role === 'admin' && u.active);
+    const admins = users_().filter(u => u.id !== user.id && u.role === 'admin' && u.active);
     if (!admins.length && !(user.role === 'admin' && user.active)) throw new Error('Er moet minstens één actieve beheerder blijven.');
 
     sh.getRange(user.row, 1, 1, 5).setNumberFormat('@')
       .setValues([[user.username, user.name, user.hash, user.role, user.active ? 'ja' : 'nee']]);
+    sh.getRange(user.row, 7).setNumberFormat('@').setValue(user.id);
     return publicUser_(user);
   } finally {
     lock.releaseLock();
@@ -359,13 +410,16 @@ function rebuildOverview_() {
   const sh = ss.getSheetByName(OVERVIEW_NAME) || ss.insertSheet(OVERVIEW_NAME);
   const rows = [['Gebruiker', 'Document', 'Soort', 'Blaadje', 'Regel', 'Gemarkeerd']];
   const legacy = firstAdmin_();
+  const names = {};
+  users_().forEach(u => { names[u.id] = u.username; });
 
   allRows_(sheetWith_(SHEET_NAME, DOC_HEADER)).forEach(r => {
     if (!r[1] || r[6] === '1') return;
     let doc;
     try { doc = rowToDoc_(r); } catch (e) { return; }
     if (doc.trashedAt) return;
-    const who = ownerOf_(r, legacy);
+    const owner = ownerOf_(r, legacy);
+    const who = names[owner] || owner;
     const kind = doc.type === 'notebook' ? 'Notebook' : 'Whiteboard';
     ((doc.content && doc.content.items) || []).forEach(it => {
       if (it.kind === 'sticky') {
@@ -450,4 +504,49 @@ function ocr_(images) {
       Drive.Files.remove(id);
     }
   });
+}
+
+// ---------- documenten zonder (bestaande) gebruiker ----------
+
+// Documenten waarvan de eigenaar niet (meer) bestaat, bv. na een gewijzigde gebruikersnaam.
+function orphans_() {
+  const known = {};
+  users_().forEach(u => { known[u.id] = true; });
+  const legacy = firstAdmin_();
+  const groups = {};
+  allRows_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME), 7).forEach(r => {
+    const owner = ownerOf_(r, legacy);
+    if (!r[1] || known[owner] || r[6] === '1') return;
+    const key = owner || '(leeg)';
+    groups[key] = groups[key] || { from: owner, count: 0, titles: [] };
+    groups[key].count++;
+    if (groups[key].titles.length < 5) groups[key].titles.push(r[3]);
+  });
+  return Object.keys(groups).map(k => groups[k]);
+}
+
+// Koppelt alle documenten (en versies) van eigenaar `from` aan gebruiker `to`.
+function assignOrphans_(from, to) {
+  const target = findUser_(to);
+  if (!target) throw new Error('Gebruiker niet gevonden.');
+  const known = {};
+  users_().forEach(u => { known[u.id] = true; });
+  if (known[from]) throw new Error('Die documenten horen al bij een bestaande gebruiker.');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    let moved = 0;
+    [SHEET_NAME, VERSIONS_NAME].forEach(name => {
+      const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+      allRows_(sh, 1).forEach((r, i) => {
+        if (r[0] !== from) return;
+        sh.getRange(i + 2, 1).setNumberFormat('@').setValue(target.id);
+        if (name === SHEET_NAME) moved++;
+      });
+    });
+    try { rebuildOverview_(); } catch (e) { console.warn('Overzicht bijwerken mislukt: ' + e); }
+    return moved;
+  } finally {
+    lock.releaseLock();
+  }
 }

@@ -4,7 +4,8 @@
 import { API_URL } from './config.js';
 
 const SESSION_KEY = 'notitiemaker.session.v1';
-const docsKey = username => `notitiemaker.docs.v2.${username}`;
+// Per gebruiker, op de vaste id (oudere sessies hebben enkel een gebruikersnaam).
+const docsKey = session => `notitiemaker.docs.v2.${session.id || session.username}`;
 // Uit de versie zonder gebruikers: worden bij de eerste login overgenomen.
 const LEGACY_DOCS_KEY = 'notitiemaker.docs.v1';
 const LEGACY_CFG_KEY = 'notitiemaker.sync.v1';
@@ -37,7 +38,7 @@ class Store extends EventTarget {
     super();
     this.url = API_URL;
     this.session = read(SESSION_KEY, null);
-    this.docs = this.session ? read(docsKey(this.session.username), {}) : {};
+    this.docs = this.session ? read(docsKey(this.session), {}) : {};
     this.status = { state: this.session ? 'idle' : 'off', message: '', at: 0 };
     this.timer = null;
     this.running = null;
@@ -46,7 +47,7 @@ class Store extends EventTarget {
     this.api = 0;
     // Een ander tabblad met de app schreef naar localStorage: neem nieuwere documenten over.
     addEventListener('storage', e => {
-      if (!this.session || e.key !== docsKey(this.session.username) || !e.newValue) return;
+      if (!this.session || e.key !== docsKey(this.session) || !e.newValue) return;
       let other;
       try { other = JSON.parse(e.newValue); } catch { return; }
       const ids = Object.keys(other).filter(id => other[id].updatedAt > (this.docs[id]?.updatedAt || 0));
@@ -98,7 +99,7 @@ class Store extends EventTarget {
 
   persist() {
     if (!this.session) return;
-    if (!write(docsKey(this.session.username), this.docs)) this.setStatus('error', 'De lokale opslag van je browser is vol.');
+    if (!write(docsKey(this.session), this.docs)) this.setStatus('error', 'De lokale opslag van je browser is vol.');
   }
 
   emit(type, detail) {
@@ -117,7 +118,15 @@ class Store extends EventTarget {
     this.api = res.api || 0;
     this.session = { ...res.user, token: res.token };
     write(SESSION_KEY, this.session);
-    this.docs = read(docsKey(this.session.username), {});
+    this.docs = read(docsKey(this.session), {});
+    // Kopie van vóór de vaste id's (opgeslagen onder de gebruikersnaam) overnemen.
+    const byName = `notitiemaker.docs.v2.${this.session.username}`;
+    const old = this.session.id ? read(byName, null) : null;
+    if (old) {
+      for (const d of Object.values(old)) if (!this.docs[d.id] || d.updatedAt > this.docs[d.id].updatedAt) this.docs[d.id] = d;
+      this.persist();
+      forget(byName);
+    }
     // Notities van vóór de accounts op dit toestel horen bij wie hier als eerste inlogt.
     const legacy = read(LEGACY_DOCS_KEY, null);
     if (legacy) {
@@ -137,7 +146,7 @@ class Store extends EventTarget {
 
   // Afmelden. De lokale kopie wordt gewist, behalve als niet alles gesynchroniseerd is.
   logout({ keepLocal = false } = {}) {
-    if (this.session && !keepLocal) forget(docsKey(this.session.username));
+    if (this.session && !keepLocal) forget(docsKey(this.session));
     this.session = null;
     this.docs = {};
     this.api = 0;
@@ -145,6 +154,13 @@ class Store extends EventTarget {
     forget(SESSION_KEY);
     this.setStatus('off');
     this.emit('session');
+  }
+
+  // De beheerder wijzigde de eigen naam of gebruikersnaam.
+  renamed(user) {
+    this.session = { ...this.session, name: user.name, username: user.username };
+    write(SESSION_KEY, this.session);
+    this.emit('status', this.status);
   }
 
   async changePassword(oldPassword, newPassword) {

@@ -448,7 +448,7 @@ function cardMenu(anchor, doc) {
 
 // ---------- tabbladen ----------
 
-const tabsKey = () => `notitiemaker.tabs.v2.${store.session?.username}`;
+const tabsKey = () => `notitiemaker.tabs.v2.${store.session?.id || store.session?.username}`;
 
 function loadTabs() {
   try { return JSON.parse(localStorage.getItem(tabsKey())) || []; } catch { return []; }
@@ -771,6 +771,7 @@ async function manageUsers() {
         <div class="v-meta">${esc(u.username)}</div>
       </div>
       <div class="user-actions">
+        <button type="button" class="btn ghost" data-act="rename" data-u="${esc(u.username)}" title="Naam of gebruikersnaam wijzigen">${icon('edit')}<span>Wijzigen</span></button>
         <button type="button" class="btn ghost" data-act="pw" data-u="${esc(u.username)}" title="Nieuw wachtwoord">${icon('restore')}<span>Wachtwoord</span></button>
         <button type="button" class="btn ghost" data-act="role" data-u="${esc(u.username)}">${u.role === 'admin' ? 'Geen beheerder' : 'Beheerder'}</button>
         <button type="button" class="btn ghost" data-act="active" data-u="${esc(u.username)}">${u.active ? 'Uitschakelen' : 'Inschakelen'}</button>
@@ -783,6 +784,7 @@ async function manageUsers() {
     cancel: '',
     body: `
       <ul class="versions users">${listHTML()}</ul>
+      <div class="orphans"></div>
       <hr>
       <h3 class="dlg-sub">Nieuwe gebruiker</h3>
       <div class="grid2">
@@ -797,10 +799,30 @@ async function manageUsers() {
       const f = k => d.querySelector(`[data-f="${k}"]`);
       const out = d.querySelector('.user-out');
       const list = d.querySelector('.users');
+      const orphanBox = d.querySelector('.orphans');
       const refresh = async () => {
         users = (await store.request('users')).users;
         list.innerHTML = listHTML();
+        await renderOrphans();
       };
+      // Documenten waarvan de eigenaar niet meer bestaat (bv. na een gewijzigde gebruikersnaam).
+      let orphans = [];
+      const renderOrphans = async () => {
+        try { orphans = (await store.request('orphans')).orphans; } catch { orphans = []; }
+        orphanBox.innerHTML = orphans.length ? `
+          <div class="orphan-box">
+            <div class="cred-title warn">Documenten zonder gebruiker</div>
+            <p class="muted">Deze documenten horen bij een gebruikersnaam die niet meer bestaat. Kies aan wie ze toebehoren.</p>
+            ${orphans.map((o, i) => `
+              <div class="orphan">
+                <div class="v-main"><div class="v-when">"${esc(o.from || 'zonder naam')}" · ${o.count} document${o.count === 1 ? '' : 'en'}</div>
+                  <div class="v-meta">${esc(o.titles.join(', '))}${o.count > o.titles.length ? ', …' : ''}</div></div>
+                <select data-orphan-to="${i}">${users.map(u => `<option value="${esc(u.username)}"${u.username === store.session.username ? ' selected' : ''}>${esc(u.name)} (${esc(u.username)})</option>`).join('')}</select>
+                <button type="button" class="btn primary" data-orphan="${i}">Toewijzen</button>
+              </div>`).join('')}
+          </div>` : '';
+      };
+      renderOrphans();
       let typedUsername = false;
       f('username').addEventListener('input', () => { typedUsername = true; });
       f('name').addEventListener('input', () => {
@@ -837,11 +859,38 @@ async function manageUsers() {
           }
           return;
         }
+        const ob = e.target.closest('[data-orphan]');
+        if (ob) {
+          const o = orphans[+ob.dataset.orphan];
+          const to = d.querySelector(`[data-orphan-to="${ob.dataset.orphan}"]`).value;
+          try {
+            const { moved } = await store.request('assignOrphans', { from: o.from, to });
+            out.innerHTML = `<p class="st-ok">${moved} document${moved === 1 ? '' : 'en'} toegewezen ✓</p>`;
+            await renderOrphans();
+            store.sync();
+          } catch (err) {
+            out.innerHTML = `<p class="err-text">${esc(err.message)}</p>`;
+          }
+          return;
+        }
         const b = e.target.closest('[data-act]');
         if (!b) return;
         const u = users.find(x => x.username === b.dataset.u);
         try {
-          if (b.dataset.act === 'pw') {
+          if (b.dataset.act === 'rename') {
+            const res = await dialog({
+              title: `${u.name} wijzigen`,
+              submit: 'Opslaan',
+              body: `
+                <label class="field"><span>Naam</span><input name="name" value="${esc(u.name)}" required autofocus></label>
+                <label class="field"><span>Gebruikersnaam</span><input name="username" value="${esc(u.username)}" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
+                <p class="muted">De documenten blijven bij deze gebruiker, ook met een nieuwe gebruikersnaam.</p>`,
+            });
+            if (!res) return;
+            const { user } = await store.request('saveUser', { username: u.username, name: res.name, newUsername: res.username });
+            if (u.username === store.session.username) store.renamed(user);
+            out.innerHTML = `<p class="st-ok">Opgeslagen ✓ ${esc(user.name)} logt voortaan in als <b>${esc(user.username)}</b>.</p>`;
+          } else if (b.dataset.act === 'pw') {
             const password = randomPassword();
             await store.request('saveUser', { username: u.username, password });
             out.innerHTML = credentialsHTML(`Nieuw wachtwoord voor ${u.name} ✓ Oude sessies zijn afgemeld.`, u, password);

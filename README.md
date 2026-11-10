@@ -51,14 +51,21 @@ De nieuwe gebruiker opent de website, logt in en kan meteen beginnen. Een eigen 
 | --- | --- | --- | --- | --- |
 | yvonne | Yvonne Peeters | een-wachtwoord | user | ja |
 
+De kolommen *aangemaakt* en *id* vult het script zelf in.
+
 Het wachtwoord mag je gewoon leesbaar typen: bij de eerste aanvraag vervangt het script het door een versleutelde versie. Zet `admin` in de kolom *rol* voor een extra beheerder.
 
 ### Beheren
 
 In **Gebruikers beheren** kan een beheerder:
+- de **naam of gebruikersnaam wijzigen** (de documenten blijven bij die gebruiker);
 - een **nieuw wachtwoord** maken (de gebruiker wordt dan overal afgemeld);
 - iemand **beheerder** maken of dat terugdraaien (er blijft altijd minstens één beheerder);
 - een account **uitschakelen** of weer inschakelen. Een uitgeschakelde gebruiker wordt meteen afgemeld; de documenten blijven in de Sheet staan.
+
+Elke gebruiker heeft in de Sheet een vaste **id** (laatste kolom van *Gebruikers*). Documenten horen bij die id, dus een gebruikersnaam mag je ook rechtstreeks in de Sheet wijzigen. Laat de kolom *id* wel met rust.
+
+Staan er toch documenten bij een gebruikersnaam die niet meer bestaat (bijvoorbeeld van vóór de vaste id's), dan toont **Gebruikers beheren** een blok *Documenten zonder gebruiker*. Kies daar de juiste gebruiker en klik op **Toewijzen**.
 
 Na 5 verkeerde wachtwoorden wordt inloggen voor die gebruikersnaam 10 minuten geblokkeerd. Een sessie blijft 90 dagen geldig.
 
