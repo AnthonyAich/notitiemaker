@@ -43,6 +43,11 @@ function deviceName() {
   return 'ander toestel';
 }
 
+// Zelfde inhoud? Dan is er niets te bewaren als conflictkopie.
+function sameDoc(a, b) {
+  return !b.deleted && a.title === b.title && JSON.stringify(a.content) === JSON.stringify(b.content);
+}
+
 // Heeft dit toestel wijzigingen die nog niet op de server staan?
 function isDirty(local) {
   return local.syncBase != null && local.updatedAt !== local.syncBase;
@@ -64,15 +69,27 @@ class Store extends EventTarget {
     this.again = false;
     // Versie van het Apps Script op de server.
     this.api = 0;
-    // Een ander tabblad met de app schreef naar localStorage: neem nieuwere documenten over.
+    this.tidied = false;
+    // Een ander tabblad met de app schreef naar localStorage: neem zijn kennis over.
     addEventListener('storage', e => {
       if (!this.session || e.key !== docsKey(this.session) || !e.newValue) return;
-      let other;
-      try { other = JSON.parse(e.newValue); } catch { return; }
-      const ids = Object.keys(other).filter(id => other[id].updatedAt > (this.docs[id]?.updatedAt || 0));
-      ids.forEach(id => { this.docs[id] = other[id]; });
-      if (ids.length) this.emit('change', { ids, source: 'remote' });
+      try { this.mergeFrom(JSON.parse(e.newValue)); } catch { /* onleesbaar: negeren */ }
     });
+  }
+
+  // Neemt nieuwere documenten en nieuwere serverkennis (syncBase) over van een ander tabblad.
+  mergeFrom(other) {
+    const ids = [];
+    for (const [id, o] of Object.entries(other || {})) {
+      const l = this.docs[id];
+      if (!l || o.updatedAt > l.updatedAt) {
+        this.docs[id] = o;
+        ids.push(id);
+      } else if (o.updatedAt === l.updatedAt && (o.syncBase ?? -1) > (l.syncBase ?? -1)) {
+        l.syncBase = o.syncBase;
+      }
+    }
+    if (ids.length) this.emit('change', { ids, source: 'remote' });
   }
 
   // ---------- documenten ----------
@@ -160,6 +177,7 @@ class Store extends EventTarget {
       forget(LEGACY_DOCS_KEY);
       forget(LEGACY_CFG_KEY);
     }
+    this.tidied = false;
     this.setStatus('idle');
     this.emit('session');
     await this.sync();
@@ -252,6 +270,7 @@ class Store extends EventTarget {
     const copy = JSON.parse(JSON.stringify(local));
     copy.id = uid();
     copy.title = `${local.title} (conflict, ${deviceName()} ${when})`;
+    copy.conflictOf = local.id;
     copy.favorite = false;
     copy.createdAt = copy.updatedAt = Date.now();
     delete copy.syncBase;
@@ -267,7 +286,8 @@ class Store extends EventTarget {
     const changed = [], conflicts = [];
     for (const d of docs) {
       const local = this.docs[d.id];
-      if (local && !local.deleted && conflictIds.has(d.id)) {
+      // Alleen een kopie als jouw versie echt iets anders bevat dan die op de server.
+      if (local && !local.deleted && conflictIds.has(d.id) && !sameDoc(local, d)) {
         const copyId = this.conflictCopy(local);
         conflicts.push({ id: d.id, copyId, title: local.title });
         changed.push(copyId);
@@ -281,18 +301,51 @@ class Store extends EventTarget {
     if (conflicts.length) this.emit('conflict', { conflicts });
   }
 
-  async run() {
+  // Conflictkopieën die niets nieuws bevatten (gelijk aan het origineel of aan een andere kopie)
+  // gaan naar de prullenbak. Dat gebeurt één keer per sessie.
+  tidyConflicts() {
+    const re = /^(.*) \(conflict, [^)]*\)$/;
+    const docs = this.list().filter(d => !d.trashedAt && (d.type === 'board' || d.type === 'notebook'));
+    const byTitle = new Map();
+    for (const d of docs) if (!re.test(d.title)) byTitle.set(d.title, [...(byTitle.get(d.title) || []), d]);
+    const seen = new Set();
+    let count = 0;
+    for (const c of docs.sort((a, b) => b.updatedAt - a.updatedAt)) {
+      const m = c.title.match(re);
+      if (!m) continue;
+      const body = JSON.stringify(c.content);
+      const originals = c.conflictOf && this.get(c.conflictOf) ? [this.get(c.conflictOf)] : byTitle.get(m[1]) || [];
+      const key = `${c.conflictOf || m[1]}|${body}`;
+      if (originals.some(o => !o.trashedAt && JSON.stringify(o.content) === body) || seen.has(key)) {
+        c.trashedAt = Date.now();
+        this.save(c);
+        count++;
+      } else {
+        seen.add(key);
+      }
+    }
+    if (count) this.emit('tidied', { count });
+  }
+
+  // Maar één tabblad tegelijk synchroniseert; daarna weet elk tabblad wat de andere deed.
+  run() {
+    return navigator.locks ? navigator.locks.request('notitiemaker-sync', () => this.runLocked()) : this.runLocked();
+  }
+
+  async runLocked() {
     clearTimeout(this.timer);
     this.setStatus('syncing');
     try {
+      this.mergeFrom(read(docsKey(this.session), {}));
       const { docs: remote, api } = await this.request('list');
       this.api = api || 1;
       const remoteById = Object.fromEntries(remote.map(r => [r.id, r]));
 
-      // Documenten die al gelijk zijn met de server krijgen hun basisversie.
+      // Staat precies deze versie al op de server (bv. een antwoord dat onderweg verloren ging),
+      // dan is het document gewoon gesynchroniseerd.
       for (const r of remote) {
         const l = this.docs[r.id];
-        if (l && l.syncBase == null && l.updatedAt === r.updatedAt) l.syncBase = r.updatedAt;
+        if (l && l.updatedAt === r.updatedAt) l.syncBase = r.updatedAt;
       }
 
       // Beschadigde rijen in de Sheet: herstellen met de kopie van dit toestel, of melden.
@@ -330,6 +383,7 @@ class Store extends EventTarget {
         const refused = res.conflicts || [];
         await this.pull(refused, new Set(refused));
       }
+      if (!this.tidied) { this.tidied = true; this.tidyConflicts(); }
       this.setStatus('ok');
     } catch (e) {
       this.setStatus('error', e.message);

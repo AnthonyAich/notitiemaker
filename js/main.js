@@ -1220,6 +1220,12 @@ function bindEvents() {
   setInterval(() => { if (!document.hidden) store.sync(); }, 60000);
 
   store.addEventListener('status', () => { renderStatus(); maybeWelcome(); });
+  store.addEventListener('tidied', e => {
+    const n = e.detail.count;
+    toast(`${n} overbodige conflictkopie${n === 1 ? '' : 'ën'} naar de prullenbak verplaatst: ze bevatten niets wat niet al in een ander document staat`);
+    if (!$('library').hidden) renderLibrary();
+    if (S.tabs.length) renderTabs();
+  });
   const reportedBroken = new Set();
   store.addEventListener('broken', e => {
     const fresh = e.detail.titles.filter(t => !reportedBroken.has(t));
