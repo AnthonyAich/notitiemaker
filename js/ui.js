@@ -77,7 +77,7 @@ export function toast(msg, kind = '') {
   t.textContent = msg;
   document.body.append(t);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.remove(), kind === 'err' ? 6000 : 2600);
+  toastTimer = setTimeout(() => t.remove(), kind ? 7000 : 2600);
 }
 
 // Toont een modale dialoog. Geeft de formulierwaarden terug, of null bij annuleren.

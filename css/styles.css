@@ -486,3 +486,4 @@ h1 { font-size: 44px; letter-spacing: -.02em; margin: 14px 0 18px; }
 .orphan .v-main { flex: 1 1 200px; min-width: 0; }
 .orphan select { font: inherit; font-size: 14px; color: var(--text); background: #141416; border: 1px solid #38383d; border-radius: 10px; padding: 7px 8px; }
 .orphan .btn { padding: 7px 12px; font-size: 14px; }
+.toast.warn { background: #6b4a00; }

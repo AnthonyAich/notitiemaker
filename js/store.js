@@ -1,7 +1,11 @@
 // Opslag: de documenten van de ingelogde gebruiker staan lokaal (localStorage)
 // en worden gesynchroniseerd met de Google Sheet via de Apps Script web-app.
-// Conflicten: het meest recent gewijzigde document wint.
+//
+// Conflicten: elk document onthoudt in `syncBase` op welke serverversie (updatedAt) het
+// verder bouwt. Is de server intussen veranderd terwijl je hier ook iets aanpaste, dan
+// wordt niets overschreven: jouw versie blijft als aparte kopie "(conflict …)" bestaan.
 import { API_URL } from './config.js';
+import { uid } from './model.js';
 
 const SESSION_KEY = 'notitiemaker.session.v1';
 // Per gebruiker, op de vaste id (oudere sessies hebben enkel een gebruikersnaam).
@@ -27,6 +31,21 @@ function write(key, value) {
     console.warn('Opslaan in localStorage mislukt', e);
     return false;
   }
+}
+
+function deviceName() {
+  const ua = navigator.userAgent;
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/Android/.test(ua)) return 'Android';
+  if (/Windows/.test(ua)) return 'Windows';
+  if (/Macintosh/.test(ua)) return 'Mac';
+  return 'ander toestel';
+}
+
+// Heeft dit toestel wijzigingen die nog niet op de server staan?
+function isDirty(local) {
+  return local.syncBase != null && local.updatedAt !== local.syncBase;
 }
 
 function forget(key) {
@@ -77,7 +96,7 @@ class Store extends EventTarget {
 
   remove(id) {
     // Een "grafsteen" zodat andere toestellen het document ook verwijderen.
-    this.docs[id] = { id, deleted: true, updatedAt: Date.now() };
+    this.docs[id] = { id, deleted: true, updatedAt: Date.now(), syncBase: this.docs[id]?.syncBase };
     this.persist();
     this.emit('change', { ids: [id], source: 'local' });
     this.schedule();
@@ -88,6 +107,8 @@ class Store extends EventTarget {
     for (const d of list) {
       if (!d?.id || !d.content || !d.type || d.deleted) continue;
       d.updatedAt = Date.now();
+      // Een back-up terugzetten mag de huidige versie overschrijven.
+      d.syncBase = this.docs[d.id]?.syncBase;
       this.docs[d.id] = d;
       ids.push(d.id);
     }
@@ -131,8 +152,8 @@ class Store extends EventTarget {
     const legacy = read(LEGACY_DOCS_KEY, null);
     if (legacy) {
       for (const d of Object.values(legacy)) {
+        // De echte wijzigingsdatum blijft staan: een nieuwere versie op de server wint.
         if (d.deleted || this.docs[d.id]) continue;
-        d.updatedAt = Date.now();
         this.docs[d.id] = d;
       }
       this.persist();
@@ -225,6 +246,41 @@ class Store extends EventTarget {
     return this.running;
   }
 
+  // Bewaart de lokale versie als apart document en geeft de nieuwe id terug.
+  conflictCopy(local) {
+    const when = new Date().toLocaleString('nl-BE', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const copy = JSON.parse(JSON.stringify(local));
+    copy.id = uid();
+    copy.title = `${local.title} (conflict, ${deviceName()} ${when})`;
+    copy.favorite = false;
+    copy.createdAt = copy.updatedAt = Date.now();
+    delete copy.syncBase;
+    delete copy.ocr;
+    this.docs[copy.id] = copy;
+    return copy.id;
+  }
+
+  // Haalt de serverversie op; lokale wijzigingen die nog niet op de server staan, worden eerst een kopie.
+  async pull(ids, conflictIds = new Set()) {
+    if (!ids.length) return;
+    const { docs } = await this.request('get', { ids });
+    const changed = [], conflicts = [];
+    for (const d of docs) {
+      const local = this.docs[d.id];
+      if (local && !local.deleted && conflictIds.has(d.id)) {
+        const copyId = this.conflictCopy(local);
+        conflicts.push({ id: d.id, copyId, title: local.title });
+        changed.push(copyId);
+      }
+      d.syncBase = d.updatedAt;
+      this.docs[d.id] = d;
+      changed.push(d.id);
+    }
+    this.persist();
+    this.emit('change', { ids: changed, source: 'remote' });
+    if (conflicts.length) this.emit('conflict', { conflicts });
+  }
+
   async run() {
     clearTimeout(this.timer);
     this.setStatus('syncing');
@@ -233,29 +289,36 @@ class Store extends EventTarget {
       this.api = api || 1;
       const remoteById = Object.fromEntries(remote.map(r => [r.id, r]));
 
-      const toFetch = remote
-        .filter(r => r.updatedAt > (this.docs[r.id]?.updatedAt || 0))
-        .map(r => r.id);
-      const toPush = Object.values(this.docs)
-        .filter(l => l.updatedAt > (remoteById[l.id]?.updatedAt || 0));
-
-      if (toFetch.length) {
-        const { docs } = await this.request('get', { ids: toFetch });
-        const changed = [];
-        for (const d of docs) {
-          // Niet overschrijven als er intussen lokaal iets nieuwers is.
-          if (d.updatedAt > (this.docs[d.id]?.updatedAt || 0)) {
-            this.docs[d.id] = d;
-            changed.push(d.id);
-          }
-        }
-        if (changed.length) {
-          this.persist();
-          this.emit('change', { ids: changed, source: 'remote' });
-        }
+      // Documenten die al gelijk zijn met de server krijgen hun basisversie.
+      for (const r of remote) {
+        const l = this.docs[r.id];
+        if (l && l.syncBase == null && l.updatedAt === r.updatedAt) l.syncBase = r.updatedAt;
       }
 
-      if (toPush.length) await this.request('save', { docs: toPush });
+      const toFetch = [], conflicts = new Set();
+      for (const r of remote) {
+        const l = this.docs[r.id];
+        const serverChanged = !l || (l.syncBase != null ? r.updatedAt !== l.syncBase : r.updatedAt > l.updatedAt);
+        if (!serverChanged) continue;
+        toFetch.push(r.id);
+        if (l && isDirty(l)) conflicts.add(r.id);
+      }
+      await this.pull(toFetch, conflicts);
+
+      const toPush = Object.values(this.docs).filter(l => {
+        const r = remoteById[l.id];
+        if (!r) return !l.deleted || l.syncBase != null;
+        return isDirty(l) || (l.syncBase == null && l.updatedAt > r.updatedAt);
+      });
+      if (toPush.length) {
+        const sent = Object.fromEntries(toPush.map(d => [d.id, d.updatedAt]));
+        const res = await this.request('save', { docs: toPush });
+        for (const id of res.saved || []) if (this.docs[id]) this.docs[id].syncBase = sent[id];
+        this.persist();
+        // De server weigerde een oude kopie: de serverversie ophalen, de onze apart bewaren.
+        const refused = res.conflicts || [];
+        await this.pull(refused, new Set(refused));
+      }
       this.setStatus('ok');
     } catch (e) {
       this.setStatus('error', e.message);

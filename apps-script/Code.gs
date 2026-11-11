@@ -17,7 +17,7 @@
  * de dienst "Drive API" aan.
  */
 
-const API_VERSION = 4;
+const API_VERSION = 5;
 const USERS_NAME = 'Gebruikers';
 const SHEET_NAME = 'Documenten';
 const VERSIONS_NAME = 'Versies';
@@ -60,7 +60,10 @@ function doPost(e) {
       case 'me': return out({ ok: true, api: API_VERSION, user: publicUser_(user) });
       case 'list': return out({ ok: true, api: API_VERSION, docs: listDocs_(me) });
       case 'get': return out({ ok: true, docs: getDocs_(me, req.ids || []) });
-      case 'save': return out({ ok: true, saved: saveDocs_(me, req.docs || []) });
+      case 'save': {
+        const res = saveDocs_(me, req.docs || []);
+        return out({ ok: true, saved: res.saved, conflicts: res.conflicts });
+      }
       case 'versions': return out({ ok: true, versions: listVersions_(me, req.id) });
       case 'version': return out({ ok: true, doc: getVersion_(me, req.id, req.at) });
       case 'ocr': return out({ ok: true, texts: ocr_(req.images || []) });
@@ -371,12 +374,22 @@ function saveDocs_(me, docs) {
     let nextRow = Math.max(sh.getLastRow(), 1) + 1;
     const tz = Session.getScriptTimeZone();
     const saved = [];
+    const conflicts = [];
 
     docs.forEach(doc => {
       if (!doc || !doc.id) return;
       const existing = index[doc.id];
-      // Het meest recent gewijzigde document wint.
-      if (existing && existing.updatedAt > doc.updatedAt) return;
+      if (existing) {
+        // Al bewaard (bv. een herhaalde aanvraag): niets te doen.
+        if (existing.updatedAt === doc.updatedAt) { saved.push(doc.id); return; }
+        // `syncBase` is de serverversie waarop het toestel verder werkte. Veranderde de
+        // server intussen, dan is dit een oude kopie: niet overschrijven, maar melden.
+        const base = doc.syncBase == null ? null : Number(doc.syncBase);
+        if (base == null ? existing.updatedAt !== doc.updatedAt : existing.updatedAt > base) {
+          conflicts.push(doc.id);
+          return;
+        }
+      }
       const values = [
         me,
         doc.id,
@@ -398,7 +411,7 @@ function saveDocs_(me, docs) {
       try { saveVersions_(me, docs.filter(d => d && !d.deleted && saved.indexOf(d.id) >= 0)); } catch (e) { console.warn('Versie bewaren mislukt: ' + e); }
       try { rebuildOverview_(); } catch (e) { console.warn('Overzicht bijwerken mislukt: ' + e); }
     }
-    return saved;
+    return { saved: saved, conflicts: conflicts };
   } finally {
     lock.releaseLock();
   }

@@ -83,7 +83,7 @@ In de Google Sheet staan deze tabbladen:
 - **Versies**: hoogstens één kopie per uur per document, de laatste 30.
 - **Overzicht**: een leesbare lijst van alle blaadjes en regels (en herkend handschrift), per gebruiker, met een kolom *Gemarkeerd*.
 
-Bij een conflict wint de laatste wijziging: als je hetzelfde document tegelijk op twee toestellen bewerkt, blijft de versie die het laatst bewaard werd.
+**Conflicten**: elk toestel onthoudt op welke versie van de server het verder werkt. Werd een document intussen op een ander toestel gewijzigd, terwijl je het hier ook aanpaste (bijvoorbeeld op een iPad die een tijd offline was), dan wordt niets overschreven. Je krijgt de nieuwste versie, en jouw versie blijft bewaard als apart document "*titel* (conflict, iPad 11/11 14:03)". Dat opent meteen in een tabblad ernaast, zodat je zelf kunt kiezen wat je houdt.
 
 ---
 

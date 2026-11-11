@@ -1080,6 +1080,26 @@ function bindEvents() {
   setInterval(() => { if (!document.hidden) store.sync(); }, 60000);
 
   store.addEventListener('status', renderStatus);
+  store.addEventListener('conflict', e => {
+    const list = e.detail.conflicts;
+    for (const c of list) {
+      if (S.doc?.id !== c.id) continue;
+      // Het open document was een oude kopie: toon de serverversie en zet jouw versie ernaast.
+      clearTimeout(S.saveTimer);
+      S.dirty = false;
+      const fresh = store.get(c.id);
+      if (fresh && !fresh.trashedAt) {
+        S.doc = fresh;
+        S.board.load(fresh);
+      }
+      if (!S.tabs.includes(c.copyId)) S.tabs.splice(S.tabs.indexOf(c.id) + 1, 0, c.copyId);
+      saveTabs();
+      renderTabs();
+    }
+    toast(list.length === 1
+      ? `"${list[0].title}" werd intussen op een ander toestel gewijzigd. Jouw versie staat apart als conflictkopie.`
+      : `${list.length} documenten werden intussen op een ander toestel gewijzigd. Jouw versies staan apart als conflictkopie.`, 'warn');
+  });
   store.addEventListener('session', () => {
     renderStatus();
     if (store.session) startSession();
