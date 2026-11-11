@@ -122,7 +122,13 @@ export function uid() {
 
 // Rondleiding voor nieuwe gebruikers. De vaste id voorkomt dubbele exemplaren
 // als iemand op twee toestellen tegelijk voor het eerst inlogt.
-export function welcomeDoc(userId) {
+// Verhoog WELCOME_VERSION telkens de inhoud verandert: via Nieuw → Rondleiding
+// krijgt een verouderde rondleiding dan de nieuwe inhoud.
+export const WELCOME_VERSION = 2;
+
+const welcomeSticker = (key, x, y, size, rot) => ({ id: uid(), kind: 'sticker', key, x, y, w: size, h: size, rot });
+
+export function welcomeContent() {
   const now = new Date();
   const today = `${now.getDate()}/${now.getMonth() + 1}`;
   const W = 320, gap = 30, col = i => i * (W + gap), row2 = 340;
@@ -152,13 +158,14 @@ export function welcomeDoc(userId) {
     ], W, 280),
     sticky(col(0), row2, 'roze', 'Documenten', [
       'Nieuw: een notebook of whiteboard',
-      'Kies een sjabloon: weekplanner, kanban, …',
+      'Kies een sjabloon: weekplanner, kanban, Cornell, …',
       '+ bovenaan opent een extra tabblad',
       'Weggegooid? Kijk in de prullenbak',
       'Klik op de documentnaam voor versies en PDF',
     ], W, 280),
     sticky(col(1), row2, 'paars', 'Handig om te weten', [
       'Alles synchroniseert vanzelf met je andere toestellen',
+      'Op twee toestellen tegelijk bewerkt? Je versie blijft bewaard als conflictkopie',
       'Werkt ook zonder internet',
       'Zoeken vindt ook je handschrift',
       'iPad: Deel → Zet op beginscherm',
@@ -167,16 +174,32 @@ export function welcomeDoc(userId) {
     sticky(col(2), row2, 'oranje', 'Probeer het zelf', [
       `${today}: deze rondleiding bekijken`,
       'Tik op deze regel',
-      'En op deze',
+      'Plak een sticker op dit blaadje',
       'Alles gemarkeerd? Kijk wat er gebeurt',
     ], W, 280),
+    sticky(col(3), row2, 'geel', 'Stickers', [
+      'Het stickers-icoon in de werkbalk',
+      'Kies er een en tik op het canvas',
+      'Bolletje erboven = draaien',
+      'Eigen sticker: teken iets, omcirkel het met de lasso en kies Sticker',
+      'Of voeg een SVG-bestand toe',
+    ], W, 280),
     label(col(3) + 20, 6, 'Teken hier iets ✍️', 34),
+    // Een paar echte stickers, als voorbeeld.
+    welcomeSticker('raket', 600, -170, 84, 12),
+    welcomeSticker('klaar', W - 46, -26, 64, 8),
+    welcomeSticker('idee', col(2) - 40, row2 - 46, 64, -10),
+    welcomeSticker('tapeRoze', col(3) + 110, row2 - 40, 100, 0),
   ];
   const strokes = [
-    shape('rect', [col(3), 0], [col(3) + 380, row2 + 280], '#9aa6b8', 4),
-    shape('arrow', [col(2) + W + 6, row2 + 150], [col(3) + 110, row2 + 70], '#5f6b7a', 3),
+    shape('rect', [col(3), 0], [col(3) + W, 290], '#9aa6b8', 4),
+    shape('arrow', [col(2) + W + 6, row2 + 26], [col(3) + 36, 302], '#5f6b7a', 3),
   ];
-  return { ...newDoc('board', 'Welkom bij Notitiemaker'), id: `welkom-${userId}`, content: { items, strokes } };
+  return { items, strokes };
+}
+
+export function welcomeDoc(userId) {
+  return { ...newDoc('board', 'Welkom bij Notitiemaker'), id: `welkom-${userId}`, welcomeVersion: WELCOME_VERSION, content: welcomeContent() };
 }
 
 export function newDoc(type, title, opts = {}) {

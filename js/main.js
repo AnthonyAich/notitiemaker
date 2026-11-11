@@ -1,7 +1,7 @@
 // App-shell: bibliotheek, editor, instellingen en synchronisatiestatus.
 import { store } from './store.js';
 import { Board } from './board.js';
-import { newDoc, cloneDoc, welcomeDoc, uid, docText, stickyStats, COVERS, PAPERS, STICKY_COLORS, INK_COLORS, HL_COLORS, BOARD_TEMPLATES } from './model.js';
+import { newDoc, cloneDoc, welcomeDoc, welcomeContent, WELCOME_VERSION, uid, docText, stickyStats, COVERS, PAPERS, STICKY_COLORS, INK_COLORS, HL_COLORS, BOARD_TEMPLATES } from './model.js';
 import { thumbSVG } from './thumb.js';
 import { printDoc } from './print.js';
 import { listVersions, getVersion, snapshot } from './versions.js';
@@ -455,11 +455,21 @@ function cardMenu(anchor, doc) {
 
 const welcomeId = () => `welkom-${store.session.id || store.session.username}`;
 
-// Opent de rondleiding; maakt ze opnieuw aan als ze weg is.
-function openWelcome() {
+// Opent de rondleiding; maakt ze opnieuw aan als ze weg is, en werkt een oude versie bij.
+async function openWelcome() {
   const existing = store.get(welcomeId());
   if (existing) {
-    if (existing.trashedAt) { delete existing.trashedAt; store.save(existing); }
+    let changed = !!existing.trashedAt;
+    delete existing.trashedAt;
+    if ((existing.welcomeVersion || 1) < WELCOME_VERSION) {
+      changed = true;
+      await snapshot(existing, 0); // de oude inhoud blijft terug te halen via Versiegeschiedenis
+      existing.content = welcomeContent();
+      existing.welcomeVersion = WELCOME_VERSION;
+      if (S.doc?.id === existing.id) S.board.load(existing);
+      toast('De rondleiding is bijgewerkt met de nieuwste functies');
+    }
+    if (changed) store.save(existing);
     return openDoc(existing.id);
   }
   const doc = welcomeDoc(store.session.id || store.session.username);
