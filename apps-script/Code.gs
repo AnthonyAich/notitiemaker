@@ -17,7 +17,7 @@
  * de dienst "Drive API" aan.
  */
 
-const API_VERSION = 5;
+const API_VERSION = 6;
 const USERS_NAME = 'Gebruikers';
 const SHEET_NAME = 'Documenten';
 const VERSIONS_NAME = 'Versies';
@@ -342,9 +342,13 @@ function ownerOf_(r, legacyOwner) {
 
 function listDocs_(me) {
   const legacy = firstAdmin_();
-  return allRows_(sheetWith_(SHEET_NAME, DOC_HEADER), 7)
+  return allRows_(sheetWith_(SHEET_NAME, DOC_HEADER))
     .filter(r => r[1] && ownerOf_(r, legacy) === me)
-    .map(r => ({ id: r[1], type: r[2], title: r[3], updatedAt: Number(r[5]) || 0, deleted: r[6] === '1' }));
+    .map(r => {
+      const d = { id: r[1], type: r[2], title: r[3], updatedAt: Number(r[5]) || 0, deleted: r[6] === '1' };
+      if (isBroken_(r)) d.broken = true;
+      return d;
+    });
 }
 
 function rowToDoc_(r) {
@@ -352,13 +356,21 @@ function rowToDoc_(r) {
   return JSON.parse(r.slice(DOC_DATA).join(''));
 }
 
+// Een rij waarvan de data leeg of onleesbaar is (bv. door een aanpassing met de hand).
+function isBroken_(r) {
+  try { rowToDoc_(r); return false; } catch (e) { return true; }
+}
+
+// Beschadigde rijen worden overgeslagen, zodat één fout de synchronisatie niet blokkeert.
 function getDocs_(me, ids) {
   const want = {};
   ids.forEach(id => { want[id] = true; });
   const legacy = firstAdmin_();
-  return allRows_(sheetWith_(SHEET_NAME, DOC_HEADER))
+  const docs = [];
+  allRows_(sheetWith_(SHEET_NAME, DOC_HEADER))
     .filter(r => want[r[1]] && ownerOf_(r, legacy) === me)
-    .map(rowToDoc_);
+    .forEach(r => { try { docs.push(rowToDoc_(r)); } catch (e) { /* beschadigd */ } });
+  return docs;
 }
 
 function saveDocs_(me, docs) {
@@ -368,8 +380,8 @@ function saveDocs_(me, docs) {
     const sh = sheetWith_(SHEET_NAME, DOC_HEADER);
     const legacy = firstAdmin_();
     const index = {};
-    allRows_(sh, 6).forEach((r, i) => {
-      if (r[1] && ownerOf_(r, legacy) === me) index[r[1]] = { row: i + 2, updatedAt: Number(r[5]) || 0 };
+    allRows_(sh).forEach((r, i) => {
+      if (r[1] && ownerOf_(r, legacy) === me) index[r[1]] = { row: i + 2, updatedAt: Number(r[5]) || 0, broken: isBroken_(r) };
     });
     let nextRow = Math.max(sh.getLastRow(), 1) + 1;
     const tz = Session.getScriptTimeZone();
@@ -379,7 +391,8 @@ function saveDocs_(me, docs) {
     docs.forEach(doc => {
       if (!doc || !doc.id) return;
       const existing = index[doc.id];
-      if (existing) {
+      // Een beschadigde rij mag altijd overschreven worden met een goede kopie.
+      if (existing && !existing.broken) {
         // Al bewaard (bv. een herhaalde aanvraag): niets te doen.
         if (existing.updatedAt === doc.updatedAt) { saved.push(doc.id); return; }
         // `syncBase` is de serverversie waarop het toestel verder werkte. Veranderde de

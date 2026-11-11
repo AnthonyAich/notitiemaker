@@ -1080,6 +1080,13 @@ function bindEvents() {
   setInterval(() => { if (!document.hidden) store.sync(); }, 60000);
 
   store.addEventListener('status', renderStatus);
+  const reportedBroken = new Set();
+  store.addEventListener('broken', e => {
+    const fresh = e.detail.titles.filter(t => !reportedBroken.has(t));
+    if (!fresh.length) return;
+    fresh.forEach(t => reportedBroken.add(t));
+    toast(`In de Google Sheet is de data van ${fresh.map(t => `"${t}"`).join(', ')} beschadigd. Op dit toestel staat er geen kopie van; open de app op een toestel dat het document nog heeft, dan wordt het hersteld.`, 'warn');
+  });
   store.addEventListener('conflict', e => {
     const list = e.detail.conflicts;
     for (const c of list) {

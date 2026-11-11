@@ -295,8 +295,18 @@ class Store extends EventTarget {
         if (l && l.syncBase == null && l.updatedAt === r.updatedAt) l.syncBase = r.updatedAt;
       }
 
+      // Beschadigde rijen in de Sheet: herstellen met de kopie van dit toestel, of melden.
+      const repair = new Set(), lost = [];
+      for (const r of remote.filter(x => x.broken)) {
+        const l = this.docs[r.id];
+        if (l && !l.deleted) repair.add(r.id);
+        else lost.push(r.title || r.id);
+      }
+      if (lost.length) this.emit('broken', { titles: lost });
+
       const toFetch = [], conflicts = new Set();
       for (const r of remote) {
+        if (r.broken) continue;
         const l = this.docs[r.id];
         const serverChanged = !l || (l.syncBase != null ? r.updatedAt !== l.syncBase : r.updatedAt > l.updatedAt);
         if (!serverChanged) continue;
@@ -307,6 +317,7 @@ class Store extends EventTarget {
 
       const toPush = Object.values(this.docs).filter(l => {
         const r = remoteById[l.id];
+        if (repair.has(l.id)) return true;
         if (!r) return !l.deleted || l.syncBase != null;
         return isDirty(l) || (l.syncBase == null && l.updatedAt > r.updatedAt);
       });
