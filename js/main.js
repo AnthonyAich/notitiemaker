@@ -1105,6 +1105,19 @@ function route() {
   }
 }
 
+// Het open document toont de nieuwste (samengevoegde) versie. Wat je net deed en nog niet
+// bewaard was, wordt eerst bewaard; de opslag voegt het dan samen in plaats van te overschrijven.
+function reloadOpenDoc() {
+  if (!S.doc || S.board.busy()) return; // tijdens een pennenstreek: daarna gebeurt het vanzelf
+  if (S.dirty) flushSave();
+  const fresh = store.get(S.doc.id);
+  if (!fresh || fresh === S.doc) return;
+  S.doc = fresh;
+  S.board.load(fresh);
+  S.board.resetHistory();
+  renderTabs();
+}
+
 function bindEvents() {
   document.querySelector('.sidebar nav').addEventListener('click', e => {
     const b = e.target.closest('[data-filter]');
@@ -1233,25 +1246,10 @@ function bindEvents() {
     fresh.forEach(t => reportedBroken.add(t));
     toast(`In de Google Sheet is de data van ${fresh.map(t => `"${t}"`).join(', ')} beschadigd. Op dit toestel staat er geen kopie van; open de app op een toestel dat het document nog heeft, dan wordt het hersteld.`, 'warn');
   });
-  store.addEventListener('conflict', e => {
-    const list = e.detail.conflicts;
-    for (const c of list) {
-      if (S.doc?.id !== c.id) continue;
-      // Het open document was een oude kopie: toon de serverversie en zet jouw versie ernaast.
-      clearTimeout(S.saveTimer);
-      S.dirty = false;
-      const fresh = store.get(c.id);
-      if (fresh && !fresh.trashedAt) {
-        S.doc = fresh;
-        S.board.load(fresh);
-      }
-      if (!S.tabs.includes(c.copyId)) S.tabs.splice(S.tabs.indexOf(c.id) + 1, 0, c.copyId);
-      saveTabs();
-      renderTabs();
-    }
-    toast(list.length === 1
-      ? `"${list[0].title}" werd intussen op een ander toestel gewijzigd. Jouw versie staat apart als conflictkopie.`
-      : `${list.length} documenten werden intussen op een ander toestel gewijzigd. Jouw versies staan apart als conflictkopie.`, 'warn');
+  // Er kwamen wijzigingen van een ander toestel bij het open document: toon de samengevoegde versie.
+  store.addEventListener('merged', e => {
+    if (!S.doc || !e.detail.ids.includes(S.doc.id)) return;
+    reloadOpenDoc();
   });
   store.addEventListener('session', () => {
     S.welcomeChecked = false;
@@ -1272,10 +1270,8 @@ function bindEvents() {
       if (!fresh || fresh.trashedAt) {
         toast(fresh ? 'Dit document is op een ander toestel naar de prullenbak verplaatst' : 'Dit document is op een ander toestel verwijderd');
         location.hash = '';
-      } else if (!S.board.busy() && !S.dirty) {
-        S.doc = fresh;
-        S.board.load(fresh);
-        renderTabs();
+      } else {
+        reloadOpenDoc();
       }
     }
     if (!$('library').hidden) renderLibrary();

@@ -231,6 +231,13 @@ export class Board {
     this.emitHistory();
   }
 
+  // Na het samenvoegen met een andere versie mag ongedaan maken die niet terugdraaien.
+  resetHistory() {
+    this.undoStack = [];
+    this.redoStack = [];
+    this.emitHistory();
+  }
+
   emitHistory() {
     this.cb.onHistory?.(this.undoStack.length > 0, this.redoStack.length > 0);
   }

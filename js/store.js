@@ -1,11 +1,12 @@
 // Opslag: de documenten van de ingelogde gebruiker staan lokaal (localStorage)
 // en worden gesynchroniseerd met de Google Sheet via de Apps Script web-app.
 //
-// Conflicten: elk document onthoudt in `syncBase` op welke serverversie (updatedAt) het
-// verder bouwt. Is de server intussen veranderd terwijl je hier ook iets aanpaste, dan
-// wordt niets overschreven: jouw versie blijft als aparte kopie "(conflict …)" bestaan.
+// Samenvoegen in plaats van overschrijven: elk onderdeel van een document (blaadje,
+// tekstvak, streep, sticker) krijgt bij elke wijziging een tijdstempel `t`, en wat je
+// verwijdert wordt bijgehouden in `content.deleted`. Werd een document op twee plaatsen
+// aangepast, dan worden beide versies per onderdeel samengevoegd: niets gaat verloren.
+// `syncBase` is de serverversie (updatedAt) waarop dit toestel verder werkt.
 import { API_URL } from './config.js';
-import { uid } from './model.js';
 
 const SESSION_KEY = 'notitiemaker.session.v1';
 // Per gebruiker, op de vaste id (oudere sessies hebben enkel een gebruikersnaam).
@@ -13,6 +14,9 @@ const docsKey = session => `notitiemaker.docs.v2.${session.id || session.usernam
 // Uit de versie zonder gebruikers: worden bij de eerste login overgenomen.
 const LEGACY_DOCS_KEY = 'notitiemaker.docs.v1';
 const LEGACY_CFG_KEY = 'notitiemaker.sync.v1';
+// Lijsten in een document waarvan de onderdelen een eigen id hebben.
+const LISTS = ['items', 'strokes', 'stickers'];
+const KEEP_DELETED_MS = 120 * 86400000;
 
 function read(key, fallback) {
   try {
@@ -33,19 +37,8 @@ function write(key, value) {
   }
 }
 
-function deviceName() {
-  const ua = navigator.userAgent;
-  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
-  if (/iPhone/.test(ua)) return 'iPhone';
-  if (/Android/.test(ua)) return 'Android';
-  if (/Windows/.test(ua)) return 'Windows';
-  if (/Macintosh/.test(ua)) return 'Mac';
-  return 'ander toestel';
-}
-
-// Zelfde inhoud? Dan is er niets te bewaren als conflictkopie.
-function sameDoc(a, b) {
-  return !b.deleted && a.title === b.title && JSON.stringify(a.content) === JSON.stringify(b.content);
+function forget(key) {
+  try { localStorage.removeItem(key); } catch { /* niet erg */ }
 }
 
 // Heeft dit toestel wijzigingen die nog niet op de server staan?
@@ -53,8 +46,49 @@ function isDirty(local) {
   return local.syncBase != null && local.updatedAt !== local.syncBase;
 }
 
-function forget(key) {
-  try { localStorage.removeItem(key); } catch { /* niet erg */ }
+// ---------- samenvoegen ----------
+
+const withoutStamp = o => JSON.stringify(o, (k, v) => (k === 't' ? undefined : v));
+
+// Vingerafdruk van elk onderdeel van een document, om wijzigingen te herkennen.
+function fingerprints(doc) {
+  const map = new Map();
+  if (!doc?.content || doc.deleted) return map;
+  for (const list of LISTS) {
+    for (const o of doc.content[list] || []) if (o?.id) map.set(`${list}:${o.id}`, withoutStamp(o));
+  }
+  return map;
+}
+
+// Lijst samenvoegen: per id wint de meest recente versie; verwijderingen tellen mee.
+function mergeList(localArr = [], serverArr = [], deleted = {}) {
+  const pick = new Map();
+  for (const o of serverArr) pick.set(o.id, o);
+  for (const o of localArr) {
+    const s = pick.get(o.id);
+    if (!s || (o.t || 0) >= (s.t || 0)) pick.set(o.id, o);
+  }
+  const order = [], seen = new Set();
+  for (const o of [...localArr, ...serverArr]) {
+    if (seen.has(o.id)) continue;
+    seen.add(o.id);
+    order.push(o.id);
+  }
+  return order.map(id => pick.get(id)).filter(o => !((deleted[o.id] || 0) > (o.t || 0)));
+}
+
+export function mergeDocs(local, server) {
+  const deleted = { ...(server.content?.deleted || {}) };
+  for (const [id, t] of Object.entries(local.content?.deleted || {})) if (!(deleted[id] >= t)) deleted[id] = t;
+  const content = { ...server.content, ...local.content, deleted };
+  for (const list of LISTS) {
+    if (local.content?.[list] || server.content?.[list]) content[list] = mergeList(local.content?.[list], server.content?.[list], deleted);
+  }
+  if (local.content?.pages || server.content?.pages) content.pages = Math.max(local.content?.pages || 1, server.content?.pages || 1);
+  // Titel, kaft, favoriet, prullenbak: de laatst gewijzigde versie wint.
+  const newer = local.updatedAt >= server.updatedAt ? local : server;
+  const older = newer === local ? server : local;
+  return { ...older, ...newer, content };
 }
 
 class Store extends EventTarget {
@@ -62,7 +96,6 @@ class Store extends EventTarget {
     super();
     this.url = API_URL;
     this.session = read(SESSION_KEY, null);
-    this.docs = this.session ? read(docsKey(this.session), {}) : {};
     this.status = { state: this.session ? 'idle' : 'off', message: '', at: 0 };
     this.timer = null;
     this.running = null;
@@ -70,11 +103,56 @@ class Store extends EventTarget {
     // Versie van het Apps Script op de server.
     this.api = 0;
     this.tidied = false;
+    // Vingerafdrukken per document, en verouderde objecten die nog open kunnen staan.
+    this.prints = new Map();
+    this.stale = new Map();
+    this.setDocs(this.session ? read(docsKey(this.session), {}) : {});
     // Een ander tabblad met de app schreef naar localStorage: neem zijn kennis over.
     addEventListener('storage', e => {
       if (!this.session || e.key !== docsKey(this.session) || !e.newValue) return;
       try { this.mergeFrom(JSON.parse(e.newValue)); } catch { /* onleesbaar: negeren */ }
     });
+  }
+
+  setDocs(docs) {
+    this.docs = docs;
+    this.prints = new Map(Object.values(docs).map(d => [d.id, fingerprints(d)]));
+    this.stale = new Map();
+  }
+
+  // Vervangt een document door een andere versie. Het oude object kan nog open staan in de
+  // editor; bewaart iemand dat later, dan wordt het samengevoegd in plaats van overschreven.
+  replace(doc) {
+    const old = this.docs[doc.id];
+    if (old && old !== doc && !old.deleted) this.stale.set(doc.id, { obj: old, prints: this.prints.get(doc.id) || new Map() });
+    this.docs[doc.id] = doc;
+    this.prints.set(doc.id, fingerprints(doc));
+  }
+
+  // Geeft gewijzigde onderdelen een tijdstempel en noteert wat verdween.
+  // Geeft true terug als er iets veranderd was.
+  stamp(doc, before = this.prints.get(doc.id)) {
+    if (!doc?.content || doc.deleted) return false;
+    const now = Date.now();
+    const after = fingerprints(doc);
+    let changed = false;
+    if (before) {
+      const deleted = doc.content.deleted || {};
+      for (const list of LISTS) {
+        for (const o of doc.content[list] || []) {
+          const k = `${list}:${o.id}`;
+          if (before.get(k) !== after.get(k)) { o.t = now; changed = true; }
+          delete deleted[o.id];
+        }
+      }
+      for (const k of before.keys()) {
+        if (!after.has(k)) { deleted[k.slice(k.indexOf(':') + 1)] = now; changed = true; }
+      }
+      for (const [id, t] of Object.entries(deleted)) if (now - t > KEEP_DELETED_MS) delete deleted[id];
+      if (Object.keys(deleted).length) doc.content.deleted = deleted;
+    }
+    this.prints.set(doc.id, after);
+    return changed;
   }
 
   // Neemt nieuwere documenten en nieuwere serverkennis (syncBase) over van een ander tabblad.
@@ -83,7 +161,13 @@ class Store extends EventTarget {
     for (const [id, o] of Object.entries(other || {})) {
       const l = this.docs[id];
       if (!l || o.updatedAt > l.updatedAt) {
-        this.docs[id] = o;
+        if (l && !l.deleted && !o.deleted) {
+          // Had dit tabblad nog iets dat het andere niet had, dan blijft het "te synchroniseren".
+          const m = mergeDocs(l, o);
+          this.replace(withoutStamp(m.content) === withoutStamp(o.content) ? o : { ...m, syncBase: o.syncBase, updatedAt: Date.now() });
+        } else {
+          this.replace(o);
+        }
         ids.push(id);
       } else if (o.updatedAt === l.updatedAt && (o.syncBase ?? -1) > (l.syncBase ?? -1)) {
         l.syncBase = o.syncBase;
@@ -104,6 +188,22 @@ class Store extends EventTarget {
   }
 
   save(doc) {
+    const cur = this.docs[doc.id];
+    const stale = this.stale.get(doc.id);
+    if (cur && cur !== doc && stale?.obj === doc && !cur.deleted) {
+      // Een verouderde versie (intussen vervangen) wordt samengevoegd met de huidige.
+      this.stamp(doc, stale.prints);
+      stale.prints = fingerprints(doc);
+      const merged = { ...mergeDocs(doc, cur), syncBase: cur.syncBase, updatedAt: Date.now() };
+      this.docs[doc.id] = merged;
+      this.prints.set(doc.id, fingerprints(merged));
+      this.persist();
+      this.emit('merged', { ids: [doc.id] });
+      this.emit('change', { ids: [doc.id], source: 'remote' });
+      this.schedule();
+      return;
+    }
+    this.stamp(doc);
     doc.updatedAt = Date.now();
     this.docs[doc.id] = doc;
     this.persist();
@@ -113,7 +213,8 @@ class Store extends EventTarget {
 
   remove(id) {
     // Een "grafsteen" zodat andere toestellen het document ook verwijderen.
-    this.docs[id] = { id, deleted: true, updatedAt: Date.now(), syncBase: this.docs[id]?.syncBase };
+    this.replace({ id, deleted: true, updatedAt: Date.now(), syncBase: this.docs[id]?.syncBase });
+    this.stale.delete(id);
     this.persist();
     this.emit('change', { ids: [id], source: 'local' });
     this.schedule();
@@ -126,7 +227,7 @@ class Store extends EventTarget {
       d.updatedAt = Date.now();
       // Een back-up terugzetten mag de huidige versie overschrijven.
       d.syncBase = this.docs[d.id]?.syncBase;
-      this.docs[d.id] = d;
+      this.replace(d);
       ids.push(d.id);
     }
     this.persist();
@@ -156,27 +257,24 @@ class Store extends EventTarget {
     this.api = res.api || 0;
     this.session = { ...res.user, token: res.token };
     write(SESSION_KEY, this.session);
-    this.docs = read(docsKey(this.session), {});
+    const docs = read(docsKey(this.session), {});
     // Kopie van vóór de vaste id's (opgeslagen onder de gebruikersnaam) overnemen.
     const byName = `notitiemaker.docs.v2.${this.session.username}`;
     const old = this.session.id ? read(byName, null) : null;
     if (old) {
-      for (const d of Object.values(old)) if (!this.docs[d.id] || d.updatedAt > this.docs[d.id].updatedAt) this.docs[d.id] = d;
-      this.persist();
+      for (const d of Object.values(old)) if (!docs[d.id] || d.updatedAt > docs[d.id].updatedAt) docs[d.id] = d;
       forget(byName);
     }
     // Notities van vóór de accounts op dit toestel horen bij wie hier als eerste inlogt.
     const legacy = read(LEGACY_DOCS_KEY, null);
     if (legacy) {
-      for (const d of Object.values(legacy)) {
-        // De echte wijzigingsdatum blijft staan: een nieuwere versie op de server wint.
-        if (d.deleted || this.docs[d.id]) continue;
-        this.docs[d.id] = d;
-      }
-      this.persist();
+      // De echte wijzigingsdatum blijft staan: een nieuwere versie op de server wint.
+      for (const d of Object.values(legacy)) if (!d.deleted && !docs[d.id]) docs[d.id] = d;
       forget(LEGACY_DOCS_KEY);
       forget(LEGACY_CFG_KEY);
     }
+    this.setDocs(docs);
+    this.persist();
     this.tidied = false;
     this.setStatus('idle');
     this.emit('session');
@@ -187,7 +285,7 @@ class Store extends EventTarget {
   logout({ keepLocal = false } = {}) {
     if (this.session && !keepLocal) forget(docsKey(this.session));
     this.session = null;
-    this.docs = {};
+    this.setDocs({});
     this.api = 0;
     clearTimeout(this.timer);
     forget(SESSION_KEY);
@@ -264,45 +362,35 @@ class Store extends EventTarget {
     return this.running;
   }
 
-  // Bewaart de lokale versie als apart document en geeft de nieuwe id terug.
-  conflictCopy(local) {
-    const when = new Date().toLocaleString('nl-BE', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
-    const copy = JSON.parse(JSON.stringify(local));
-    copy.id = uid();
-    copy.title = `${local.title} (conflict, ${deviceName()} ${when})`;
-    copy.conflictOf = local.id;
-    copy.favorite = false;
-    copy.createdAt = copy.updatedAt = Date.now();
-    delete copy.syncBase;
-    delete copy.ocr;
-    this.docs[copy.id] = copy;
-    return copy.id;
-  }
-
-  // Haalt de serverversie op; lokale wijzigingen die nog niet op de server staan, worden eerst een kopie.
-  async pull(ids, conflictIds = new Set()) {
+  // Haalt serverversies op. Heeft dit toestel ook wijzigingen, dan worden beide samengevoegd.
+  async pull(ids) {
     if (!ids.length) return;
     const { docs } = await this.request('get', { ids });
-    const changed = [], conflicts = [];
+    const changed = [], merged = [];
     for (const d of docs) {
       const local = this.docs[d.id];
-      // Alleen een kopie als jouw versie echt iets anders bevat dan die op de server.
-      if (local && !local.deleted && conflictIds.has(d.id) && !sameDoc(local, d)) {
-        const copyId = this.conflictCopy(local);
-        conflicts.push({ id: d.id, copyId, title: local.title });
-        changed.push(copyId);
-      }
       d.syncBase = d.updatedAt;
-      this.docs[d.id] = d;
+      // Ook wijzigingen die nog niet bewaard waren (bv. een markering van net) tellen mee.
+      const pending = local && !local.deleted && this.stamp(local);
+      if (local && !local.deleted && !d.deleted && (isDirty(local) || pending || local.syncBase == null && local.updatedAt > d.updatedAt)) {
+        const m = { ...mergeDocs(local, d), syncBase: d.updatedAt, updatedAt: Date.now() };
+        this.replace(m);
+        merged.push(d.id);
+      } else {
+        this.replace(d);
+      }
       changed.push(d.id);
     }
     this.persist();
     this.emit('change', { ids: changed, source: 'remote' });
-    if (conflicts.length) this.emit('conflict', { conflicts });
+    if (merged.length) {
+      this.emit('merged', { ids: merged });
+      this.schedule(300);
+    }
   }
 
-  // Conflictkopieën die niets nieuws bevatten (gelijk aan het origineel of aan een andere kopie)
-  // gaan naar de prullenbak. Dat gebeurt één keer per sessie.
+  // Oude conflictkopieën die niets nieuws bevatten (gelijk aan het origineel of aan een andere
+  // kopie) gaan naar de prullenbak. Dat gebeurt één keer per sessie.
   tidyConflicts() {
     const re = /^(.*) \(conflict, [^)]*\)$/;
     const docs = this.list().filter(d => !d.trashedAt && (d.type === 'board' || d.type === 'notebook'));
@@ -313,10 +401,11 @@ class Store extends EventTarget {
     for (const c of docs.sort((a, b) => b.updatedAt - a.updatedAt)) {
       const m = c.title.match(re);
       if (!m) continue;
-      const body = JSON.stringify(c.content);
+      const body = withoutStamp(c.content.items) + withoutStamp(c.content.strokes);
+      const same = o => !o.trashedAt && withoutStamp(o.content.items) + withoutStamp(o.content.strokes) === body;
       const originals = c.conflictOf && this.get(c.conflictOf) ? [this.get(c.conflictOf)] : byTitle.get(m[1]) || [];
       const key = `${c.conflictOf || m[1]}|${body}`;
-      if (originals.some(o => !o.trashedAt && JSON.stringify(o.content) === body) || seen.has(key)) {
+      if (originals.some(same) || seen.has(key)) {
         c.trashedAt = Date.now();
         this.save(c);
         count++;
@@ -357,16 +446,12 @@ class Store extends EventTarget {
       }
       if (lost.length) this.emit('broken', { titles: lost });
 
-      const toFetch = [], conflicts = new Set();
-      for (const r of remote) {
-        if (r.broken) continue;
+      const toFetch = remote.filter(r => {
+        if (r.broken) return false;
         const l = this.docs[r.id];
-        const serverChanged = !l || (l.syncBase != null ? r.updatedAt !== l.syncBase : r.updatedAt > l.updatedAt);
-        if (!serverChanged) continue;
-        toFetch.push(r.id);
-        if (l && isDirty(l)) conflicts.add(r.id);
-      }
-      await this.pull(toFetch, conflicts);
+        return !l || (l.syncBase != null ? r.updatedAt !== l.syncBase : r.updatedAt !== l.updatedAt);
+      }).map(r => r.id);
+      await this.pull(toFetch);
 
       const toPush = Object.values(this.docs).filter(l => {
         const r = remoteById[l.id];
@@ -379,9 +464,8 @@ class Store extends EventTarget {
         const res = await this.request('save', { docs: toPush });
         for (const id of res.saved || []) if (this.docs[id]) this.docs[id].syncBase = sent[id];
         this.persist();
-        // De server weigerde een oude kopie: de serverversie ophalen, de onze apart bewaren.
-        const refused = res.conflicts || [];
-        await this.pull(refused, new Set(refused));
+        // De server had intussen een nieuwere versie: ophalen en samenvoegen.
+        await this.pull(res.conflicts || []);
       }
       if (!this.tidied) { this.tidied = true; this.tidyConflicts(); }
       this.setStatus('ok');

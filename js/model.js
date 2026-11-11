@@ -124,7 +124,7 @@ export function uid() {
 // als iemand op twee toestellen tegelijk voor het eerst inlogt.
 // Verhoog WELCOME_VERSION telkens de inhoud verandert: via Nieuw → Rondleiding
 // krijgt een verouderde rondleiding dan de nieuwe inhoud.
-export const WELCOME_VERSION = 2;
+export const WELCOME_VERSION = 3;
 
 const welcomeSticker = (key, x, y, size, rot) => ({ id: uid(), kind: 'sticker', key, x, y, w: size, h: size, rot });
 
@@ -165,7 +165,7 @@ export function welcomeContent() {
     ], W, 280),
     sticky(col(1), row2, 'paars', 'Handig om te weten', [
       'Alles synchroniseert vanzelf met je andere toestellen',
-      'Op twee toestellen tegelijk bewerkt? Je versie blijft bewaard als conflictkopie',
+      'Op twee toestellen tegelijk bewerkt? Alles wordt samengevoegd',
       'Werkt ook zonder internet',
       'Zoeken vindt ook je handschrift',
       'iPad: Deel → Zet op beginscherm',
