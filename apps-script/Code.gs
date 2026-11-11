@@ -17,7 +17,7 @@
  * de dienst "Drive API" aan.
  */
 
-const API_VERSION = 6;
+const API_VERSION = 7;
 const USERS_NAME = 'Gebruikers';
 const SHEET_NAME = 'Documenten';
 const VERSIONS_NAME = 'Versies';
@@ -114,6 +114,61 @@ function ensureSheets_() {
     }
   });
   migrateOwnersToIds_();
+  repairOldLayoutRows_();
+}
+
+// Rijen die nog door een oude versie van het script (zonder kolom "eigenaar") geschreven
+// werden, staan één kolom verschoven: in de kolom "id" staat dan "board" of "notebook".
+// De volledige data zit er nog in; die rijen worden hier rechtgezet.
+const OLD_LAYOUT_DATA = 7; // in de oude indeling begon de data een kolom vroeger
+const DOC_TYPES = { board: true, notebook: true, stickers: true };
+
+function repairOldLayoutRows_() {
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sh || sh.getLastRow() < 2) return;
+  const ids = sh.getRange(2, 2, sh.getLastRow() - 1, 1).getDisplayValues();
+  if (!ids.some(r => DOC_TYPES[r[0]])) return;
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const known = {};
+    users_().forEach(u => { known[u.id] = true; });
+    const rows = allRows_(sh);
+    const legacy = firstAdmin_();
+    const proper = {};
+    rows.forEach((r, i) => { if (r[1] && !DOC_TYPES[r[1]]) proper[ownerOf_(r, legacy) + '|' + r[1]] = { row: i + 2, r: r }; });
+    const tz = Session.getScriptTimeZone();
+    const remove = [];
+
+    rows.forEach((r, i) => {
+      if (!DOC_TYPES[r[1]]) return;
+      let doc;
+      try { doc = JSON.parse(r.slice(OLD_LAYOUT_DATA).join('')); } catch (e) { return; }
+      if (!doc || !doc.id || !doc.content) return;
+      // Al aan een gebruiker toegewezen? Dan blijft dat zo; anders komt het bij "Documenten zonder gebruiker".
+      const owner = known[r[0]] ? r[0] : 'oude-app';
+      const twin = proper[owner + '|' + doc.id];
+      if (twin) {
+        let other = null;
+        try { other = rowToDoc_(twin.r); } catch (e) { /* beschadigd */ }
+        if (other && JSON.stringify(other.content) === JSON.stringify(doc.content)) { remove.push(i + 2); return; }
+        if (other) {
+          // Andere inhoud: bewaren als apart document, zodat niets verloren gaat.
+          doc.id = doc.id + '-hersteld';
+          doc.title = (doc.title || 'Document') + ' (hersteld)';
+        }
+      }
+      const values = [owner, doc.id, doc.type || '', doc.title || '', doc.favorite ? '1' : '',
+        String(doc.updatedAt || Date.now()), '', Utilities.formatDate(new Date(doc.updatedAt || Date.now()), tz, 'yyyy-MM-dd HH:mm')]
+        .concat(chunks_(JSON.stringify(doc)));
+      sh.getRange(i + 2, 1, 1, sh.getLastColumn()).clearContent();
+      writeRow_(sh, i + 2, values);
+    });
+    remove.sort((a, b) => b - a).forEach(row => sh.deleteRow(row));
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Eenmalig: eigenaars die nog als gebruikersnaam genoteerd staan, omzetten naar de vaste id.

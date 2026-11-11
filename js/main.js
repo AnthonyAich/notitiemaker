@@ -942,7 +942,7 @@ async function manageUsers() {
             <p class="muted">Deze documenten horen bij een gebruikersnaam die niet meer bestaat. Kies aan wie ze toebehoren.</p>
             ${orphans.map((o, i) => `
               <div class="orphan">
-                <div class="v-main"><div class="v-when">"${esc(o.from || 'zonder naam')}" · ${o.count} document${o.count === 1 ? '' : 'en'}</div>
+                <div class="v-main"><div class="v-when">${o.from === 'oude-app' ? 'Uit een oude versie van de app' : `"${esc(o.from || 'zonder naam')}"`} · ${o.count} document${o.count === 1 ? '' : 'en'}</div>
                   <div class="v-meta">${esc(o.titles.join(', '))}${o.count > o.titles.length ? ', …' : ''}</div></div>
                 <select data-orphan-to="${i}">${users.map(u => `<option value="${esc(u.username)}"${u.username === store.session.username ? ' selected' : ''}>${esc(u.name)} (${esc(u.username)})</option>`).join('')}</select>
                 <button type="button" class="btn primary" data-orphan="${i}">Toewijzen</button>
