@@ -46,6 +46,7 @@ const ICONS = {
   template: '<rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 9h17M9 9v11.5"/>',
   wifiOff: '<path d="M2 8.5a15 15 0 0 1 4.5-2.8M10 5.1A15 15 0 0 1 22 8.5M5.5 12.5a10 10 0 0 1 3-1.9M15 11a10 10 0 0 1 3.5 1.5M9 16a5 5 0 0 1 6 0"/><circle cx="12" cy="19.5" r=".8" fill="currentColor"/><path d="M3 3l18 18"/>',
   help: '<circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8"/><circle cx="12" cy="17" r=".7" fill="currentColor"/>',
+  sticker: '<path d="M4.5 12A7.5 7.5 0 0 1 12 4.5h7.5V12a7.5 7.5 0 0 1-7.5 7.5A7.5 7.5 0 0 1 4.5 12z"/><path d="M19.5 12H16a4 4 0 0 0-4 4v3.5"/><circle cx="9.5" cy="10" r="1" fill="currentColor"/><circle cx="14" cy="10" r="1" fill="currentColor"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.2 0 1.8-.9 1.4-2-.5-1.2.3-2.5 1.6-2.5H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1" fill="currentColor"/><circle cx="10" cy="7" r="1" fill="currentColor"/><circle cx="15" cy="7.5" r="1" fill="currentColor"/>',
 };

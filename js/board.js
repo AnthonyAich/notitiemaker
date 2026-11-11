@@ -3,6 +3,7 @@
 import { strokePath, hitStroke, strokeBBox, strokeInPolygon, pointInPolygon, recognizeShape } from './ink.js';
 import { PAGE_W, PAGE_H, STICKY_COLORS, INK_COLORS, coverSVG, weekPageSVG, pageTop, uid, lineDate } from './model.js';
 import { confetti } from './fx.js';
+import { stickerParts, stickerFromStrokes } from './stickers.js';
 import { esc, icon } from './ui.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -30,6 +31,7 @@ const DEFAULT_OPTS = {
   textColor: '#1d1d1f', textSize: 28,
   stickyColor: 'geel',
   shapeKind: 'arrow',
+  stickerKey: 'klaar', stickerCat: 'status',
 };
 
 function readJSON(key) {
@@ -88,6 +90,12 @@ function itemHTML(it, selected) {
       `<li data-i="${i}" class="lvl-${l.indent || 0}${l.hl ? ' hl' : ''}"><span>${lineHTML(l)}</span></li>`).join('');
     return `<div class="item sticky${sel}" data-id="${it.id}" style="left:${it.x}px;top:${it.y}px;width:${it.w}px;min-height:${it.h}px;--bg:${col.bg};--hl:${col.hl}">
       <div class="sticky-title">${esc(it.title)}</div><ul class="sticky-lines">${lines}</ul><div class="handle"></div></div>`;
+  }
+  if (it.kind === 'sticker') {
+    const p = stickerParts(it);
+    return `<div class="item sticker${sel}" data-id="${it.id}" style="left:${it.x}px;top:${it.y}px;width:${it.w}px;height:${it.h}px;transform:rotate(${it.rot || 0}deg)">
+      <svg viewBox="${p.vb}" preserveAspectRatio="xMidYMid meet"><g${p.cut ? ' filter="url(#sticker-cut)"' : ''}>${p.body}</g></svg>
+      <div class="handle"></div><div class="rot-handle" title="Draaien"></div></div>`;
   }
   return `<div class="item text${sel}" data-id="${it.id}" style="left:${it.x}px;top:${it.y}px;font-size:${it.size}px;color:${esc(it.color)}">${esc(it.text)}</div>`;
 }
@@ -406,19 +414,20 @@ export class Board {
       key = `lasso|${[...this.lasso.strokes].join()}|${[...this.lasso.items].join()}`;
       h = `${colors(INK_COLORS).map(c => `<button class="swatch" data-act="lcolor" data-v="${c}" style="--c:${c}" title="Kleur van het handschrift"></button>`).join('')}
         <span class="sep"></span>
+        <button data-act="lsticker" title="Bewaar het handschrift als eigen sticker">${icon('sticker')}<span>Sticker</span></button>
         <button data-act="ldup" title="Dupliceren (⌘D)">${icon('copy')}</button>
         <button data-act="ldel" title="Verwijderen (⌫)">${icon('trash')}</button>`;
     } else if (this.tool === 'select' && this.selected && !this.editing) {
       const it = this.item(this.selected);
       if (it) {
         key = `${it.id}|${it.color}`;
-        h = `<button data-act="edit">${icon('edit')}<span>Bewerk</span></button><span class="sep"></span>`;
-        h += it.kind === 'sticky'
+        h = it.kind === 'sticker' ? '' : `<button data-act="edit">${icon('edit')}<span>Bewerk</span></button><span class="sep"></span>`;
+        if (it.kind !== 'sticker') h += it.kind === 'sticky'
           ? Object.entries(STICKY_COLORS).map(([k, c]) =>
             `<button class="swatch${it.color === k ? ' on' : ''}" data-act="color" data-v="${k}" style="--c:${c.bg}" title="${k}"></button>`).join('')
           : colors(INK_COLORS).map(c =>
             `<button class="swatch${it.color === c ? ' on' : ''}" data-act="color" data-v="${c}" style="--c:${c}"></button>`).join('');
-        h += `<span class="sep"></span>
+        h += `${it.kind === 'sticker' ? '' : '<span class="sep"></span>'}
           <button data-act="front" title="Naar voren">${icon('front')}</button>
           <button data-act="dup" title="Dupliceren (⌘D)">${icon('copy')}</button>
           <button data-act="del" title="Verwijderen (⌫)">${icon('trash')}</button>`;
@@ -451,6 +460,7 @@ export class Board {
 
   barAction(act, v) {
     if (act === 'lcolor') return this.lassoColor(v);
+    if (act === 'lsticker') return this.lassoToSticker();
     if (act === 'ldup') return this.lassoDuplicate();
     if (act === 'ldel') return this.lassoDelete();
     const it = this.item(this.selected);
@@ -539,6 +549,7 @@ export class Board {
       [it.x, it.y] = tf([o.x, o.y]).map(Math.round);
       if (k !== 1) {
         if (it.kind === 'text') it.size = Math.max(8, Math.round(o.size * k));
+        else if (it.kind === 'sticker') { const f = Math.max(k, 16 / Math.min(o.w, o.h)); it.w = Math.round(o.w * f); it.h = Math.round(o.h * f); }
         else { it.w = Math.max(140, Math.round(o.w * k)); it.h = Math.max(80, Math.round(o.h * k)); }
       }
     }
@@ -550,6 +561,7 @@ export class Board {
       el.style.left = `${it.x}px`;
       el.style.top = `${it.y}px`;
       if (it.kind === 'text') el.style.fontSize = `${it.size}px`;
+      else if (it.kind === 'sticker') { el.style.width = `${it.w}px`; el.style.height = `${it.h}px`; }
       else { el.style.width = `${it.w}px`; el.style.minHeight = `${it.h}px`; }
     }
     this.renderLasso();
@@ -562,6 +574,32 @@ export class Board {
       strokes: new Map(p.strokes.map(s => [s.id, { points: s.points, width: s.width }])),
       items: new Map(p.items.map(i => [i.id, { x: i.x, y: i.y, w: i.w, h: i.h, size: i.size }])),
     };
+  }
+
+  // Het geselecteerde handschrift wordt een eigen sticker (de streken blijven staan).
+  lassoToSticker() {
+    if (!this.lasso) return;
+    const sticker = stickerFromStrokes(this.lassoParts().strokes);
+    if (sticker) this.cb.onSaveSticker?.(sticker);
+    else this.cb.onMessage?.('Omcirkel eerst iets dat je getekend hebt.');
+  }
+
+  addSticker(wx, wy) {
+    const data = this.cb.stickerData?.(this.opts.stickerKey);
+    if (!data) return;
+    const size = 96;
+    const ratio = (data.w || 100) / (data.h || 100);
+    const w = Math.round(ratio >= 1 ? size : size * ratio), h = Math.round(ratio >= 1 ? size / ratio : size);
+    this.pushUndo(this.snapshot());
+    const it = {
+      id: uid(), kind: 'sticker', x: Math.round(wx - w / 2), y: Math.round(wy - h / 2), w, h,
+      // Een klein willekeurig hoekje, zoals een echte sticker.
+      rot: Math.round((Math.random() - 0.5) * 12),
+      ...(data.key ? { key: data.key } : { svg: data.svg, vb: data.vb }),
+    };
+    this.c.items.push(it);
+    this.renderItems();
+    this.changed();
   }
 
   addPage() {
@@ -597,7 +635,7 @@ export class Board {
     this.finishEdit();
     const it = this.item(id);
     const el = this.itemEl(id);
-    if (!it || !el) return;
+    if (!it || !el || it.kind === 'sticker') return;
     this.editing = { id, isNew, snap };
     this.select(id);
     el.classList.add('editing');
@@ -771,6 +809,7 @@ export class Board {
       }
       case 'text':
       case 'sticky':
+      case 'sticker':
         this.action = { type: 'create', tool, wx, wy, sx: px, sy: py, target: e.target.closest('.item')?.dataset.id };
         break;
       case 'select': {
@@ -784,6 +823,11 @@ export class Board {
         const it = this.item(id);
         const li = e.target.closest('li[data-i]');
         this.select(id);
+        if (e.target.closest('.rot-handle')) {
+          const r = itEl.getBoundingClientRect(), br = this.el.getBoundingClientRect();
+          this.action = { type: 'rotate', id, el: itEl, cx: r.left + r.width / 2 - br.left, cy: r.top + r.height / 2 - br.top, snap: this.snapshot(), moved: false };
+          break;
+        }
         this.action = {
           type: e.target.closest('.handle') ? 'resize' : 'move',
           id, el: itEl, sx: px, sy: py, ox: it.x, oy: it.y, ow: it.w, oh: it.h,
@@ -886,6 +930,13 @@ export class Board {
           it.y = Math.round(a.oy + dy);
           a.el.style.left = `${it.x}px`;
           a.el.style.top = `${it.y}px`;
+        } else if (it.kind === 'sticker') {
+          // In verhouding vergroten of verkleinen.
+          const f = Math.max(16 / Math.min(a.ow, a.oh), (a.ow + dx + a.oh + dy) / (a.ow + a.oh));
+          it.w = Math.round(a.ow * f);
+          it.h = Math.round(a.oh * f);
+          a.el.style.width = `${it.w}px`;
+          a.el.style.height = `${it.h}px`;
         } else {
           it.w = Math.round(Math.max(140, a.ow + dx));
           it.h = Math.round(Math.max(80, a.oh + dy));
@@ -893,6 +944,16 @@ export class Board {
           a.el.style.minHeight = `${it.h}px`;
         }
         this.positionBar();
+        break;
+      }
+      case 'rotate': {
+        a.moved = true;
+        const it = this.item(a.id);
+        let deg = Math.atan2(py - a.cy, px - a.cx) * 180 / Math.PI + 90;
+        deg = ((Math.round(deg) + 540) % 360) - 180;
+        if (Math.abs(deg) < 4) deg = 0; // recht zetten is makkelijk
+        it.rot = deg;
+        a.el.style.transform = `rotate(${deg}deg)`;
         break;
       }
     }
@@ -961,6 +1022,7 @@ export class Board {
         break;
       case 'move':
       case 'resize':
+      case 'rotate':
         if (a.moved) { this.pushUndo(a.snap); this.changed(); }
         else if (commit && a.type === 'move') this.tap(a);
         break;
@@ -968,7 +1030,8 @@ export class Board {
         if (!commit || !e) return;
         const [px, py] = this.local(e);
         if (Math.hypot(px - a.sx, py - a.sy) > 10) return;
-        if (a.target) this.startEdit(a.target);
+        if (a.tool === 'sticker') this.addSticker(a.wx, a.wy);
+        else if (a.target) this.startEdit(a.target);
         else if (a.tool === 'text') this.addText(a.wx, a.wy);
         else this.addSticky(a.wx, a.wy);
         break;
@@ -1047,7 +1110,7 @@ export class Board {
     if (e.key === '0') { this.fit(); return true; }
     if (e.key === '+' || e.key === '=') { this.zoomBy(1.25); return true; }
     if (e.key === '-') { this.zoomBy(0.8); return true; }
-    const tools = { v: 'select', l: 'lasso', p: 'pen', h: 'highlighter', s: 'shape', e: 'eraser', t: 'text', n: 'sticky' };
+    const tools = { v: 'select', l: 'lasso', p: 'pen', h: 'highlighter', s: 'shape', e: 'eraser', t: 'text', n: 'sticky', k: 'sticker' };
     if (tools[k]) { this.cb.onToolKey?.(tools[k]); return true; }
     return false;
   }

@@ -2,6 +2,7 @@
 import { STICKY_COLORS, coverSVG } from './model.js';
 import { strokePath, strokeBBox } from './ink.js';
 import { esc } from './ui.js';
+import { stickerParts } from './stickers.js';
 
 export function thumbSVG(doc) {
   if (doc.type === 'notebook') return coverSVG(doc);
@@ -26,6 +27,10 @@ export function thumbSVG(doc) {
         const lx = it.x + 16 + (l.indent || 0) * 20;
         parts.push(`<rect x="${lx}" y="${it.y + 48 + i * 26}" width="${Math.min(it.x + it.w - 16 - lx, 14 + l.text.length * 8)}" height="${l.hl ? 16 : 8}" rx="${l.hl ? 8 : 3}" fill="${l.hl ? col.hl : 'rgba(0,0,0,.28)'}"/>`);
       });
+    } else if (it.kind === 'sticker') {
+      const p = stickerParts(it);
+      grow(it.x, it.y, it.w, it.h);
+      parts.push(`<g transform="rotate(${it.rot || 0} ${it.x + it.w / 2} ${it.y + it.h / 2})"><svg x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" viewBox="${p.vb}" overflow="visible">${p.body}</svg></g>`);
     } else {
       const rows = String(it.text || '').split('\n');
       const w = Math.max(...rows.map(r => r.length)) * it.size * 0.45;

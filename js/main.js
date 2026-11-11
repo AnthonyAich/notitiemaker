@@ -6,6 +6,7 @@ import { thumbSVG } from './thumb.js';
 import { printDoc } from './print.js';
 import { listVersions, getVersion, snapshot } from './versions.js';
 import { needsOcr, inkSignature, recognize } from './ocr.js';
+import { STICKER_CATS, stickerSVG, stickerLabel, ensureStickerDefs, stickerFromSVG } from './stickers.js';
 import { esc, icon, dialog, confirmDialog, popMenu, closeMenu, toast, fmtDate } from './ui.js';
 
 const TOOLS = [
@@ -17,17 +18,21 @@ const TOOLS = [
   { id: 'eraser', icon: 'eraser', label: 'Gum', key: 'E' },
   { id: 'text', icon: 'text', label: 'Tekst', key: 'T' },
   { id: 'sticky', icon: 'sticky', label: 'Notitieblaadje', key: 'N' },
+  { id: 'sticker', icon: 'sticker', label: 'Stickers', key: 'K' },
 ];
 
 const SHAPES = [['arrow', 'Pijl'], ['line', 'Lijn'], ['rect', 'Rechthoek'], ['ellipse', 'Ellips']];
 const TRASH_DAYS = 30;
 
+// Alleen notebooks en whiteboards; de stickerbibliotheek is ook een (verborgen) document.
+const isDoc = d => d.type === 'board' || d.type === 'notebook';
+
 const FILTERS = {
-  all: { title: 'Documenten', icon: 'folder', test: d => !d.trashedAt },
-  fav: { title: 'Favorieten', icon: 'star', test: d => !d.trashedAt && d.favorite },
+  all: { title: 'Documenten', icon: 'folder', test: d => isDoc(d) && !d.trashedAt },
+  fav: { title: 'Favorieten', icon: 'star', test: d => isDoc(d) && !d.trashedAt && d.favorite },
   board: { title: 'Whiteboards', icon: 'board', test: d => !d.trashedAt && d.type === 'board' },
   notebook: { title: 'Notebooks', icon: 'book', test: d => !d.trashedAt && d.type === 'notebook' },
-  trash: { title: 'Prullenbak', icon: 'trash', test: d => !!d.trashedAt },
+  trash: { title: 'Prullenbak', icon: 'trash', test: d => isDoc(d) && !!d.trashedAt },
 };
 
 const S = { filter: 'all', query: '', sort: 'updated', board: null, doc: null, saveTimer: null, dirty: false, ocrError: '', tabs: [], lastTab: null };
@@ -468,7 +473,7 @@ function openWelcome() {
 function maybeWelcome() {
   if (S.welcomeChecked || !store.session || store.status.state !== 'ok') return;
   S.welcomeChecked = true;
-  if (Object.keys(store.docs).length) return;
+  if (Object.values(store.docs).some(d => d.type !== 'stickers')) return;
   const doc = welcomeDoc(store.session.id || store.session.username);
   store.save(doc);
   if (!S.doc) openDoc(doc.id);
@@ -488,7 +493,7 @@ function saveTabs() {
 
 function tabDocs() {
   // Verwijderde of weggegooide documenten verdwijnen vanzelf uit de tabbladen.
-  S.tabs = S.tabs.filter(id => { const d = store.get(id); return d && !d.trashedAt; });
+  S.tabs = S.tabs.filter(id => { const d = store.get(id); return d && isDoc(d) && !d.trashedAt; });
   return S.tabs.map(id => store.get(id));
 }
 
@@ -519,7 +524,7 @@ function closeTab(id) {
 
 function newTabMenu(anchor) {
   const recent = store.list()
-    .filter(d => !d.trashedAt && !S.tabs.includes(d.id))
+    .filter(d => isDoc(d) && !d.trashedAt && !S.tabs.includes(d.id))
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 8);
   popMenu(anchor, [
@@ -581,6 +586,14 @@ function showEditor(doc) {
     onView: z => { $('zoomLabel').textContent = `${Math.round(z * 100)}%`; },
     onHistory: (u, r) => { $('undoBtn').disabled = !u; $('redoBtn').disabled = !r; },
     onToolKey: setTool,
+    stickerData,
+    onSaveSticker: st => {
+      saveCustomSticker(st);
+      S.board.setOpt('stickerKey', `c:${st.id}`);
+      S.board.setOpt('stickerCat', 'mijn');
+      toast('Bewaard bij Mijn stickers ✓ Kies het stickers-icoon om hem te plakken.');
+    },
+    onMessage: msg => toast(msg),
   });
   setTool(S.board.tool);
 }
@@ -649,10 +662,86 @@ function renderSubbar() {
     case 'eraser':
       h = '<span class="hint">Veeg over een lijn om ze te wissen</span>';
       break;
+    case 'sticker':
+      h = stickerPanelHTML(o);
+      break;
     default:
       h = '<span class="hint">Sleep om te verplaatsen · tik op een regel om te markeren · dubbeltik om te bewerken</span>';
   }
+  $('subbar').classList.toggle('stickers', b.tool === 'sticker');
   $('subbar').innerHTML = h;
+}
+
+// ---------- stickers ----------
+
+const libraryId = () => `stickers-${store.session.id || store.session.username}`;
+
+function customStickers() {
+  return store.get(libraryId())?.content.stickers || [];
+}
+
+function saveCustomSticker(st) {
+  let lib = store.get(libraryId());
+  if (!lib) {
+    const now = Date.now();
+    lib = { id: libraryId(), type: 'stickers', title: 'Mijn stickers', createdAt: now, updatedAt: now, content: { stickers: [] } };
+  }
+  lib.content.stickers.unshift(st);
+  store.save(lib);
+}
+
+function removeCustomSticker(id) {
+  const lib = store.get(libraryId());
+  if (!lib) return;
+  lib.content.stickers = lib.content.stickers.filter(s => s.id !== id);
+  store.save(lib);
+}
+
+// Gegevens om een sticker te plakken: een naam (ingebouwd) of de eigen SVG.
+function stickerData(key) {
+  if (key?.startsWith('c:')) {
+    const st = customStickers().find(s => s.id === key.slice(2));
+    return st ? { svg: st.svg, vb: st.vb, w: st.w, h: st.h } : null;
+  }
+  return { key: key || 'klaar', w: 100, h: 100 };
+}
+
+function stickerPanelHTML(o) {
+  const cat = o.stickerCat || 'status';
+  const tabs = [...STICKER_CATS.map(([k, l]) => [k, l]), ['mijn', 'Mijn stickers']]
+    .map(([k, l]) => `<button class="st-tab${k === cat ? ' on' : ''}" data-st-cat="${k}">${l}</button>`).join('');
+  let tiles, hint = '<p class="st-hint">Tik op het canvas om de sticker te plakken. Met het pijltje kun je hem daarna verslepen, groter maken en draaien.</p>';
+  if (cat === 'mijn') {
+    const mine = customStickers();
+    tiles = `<button class="st-tile st-add" data-st-upload title="SVG-bestand toevoegen">${icon('upload')}<span>SVG</span></button>`
+      + mine.map(st => `<button class="st-tile${o.stickerKey === `c:${st.id}` ? ' on' : ''}" data-k="stickerKey" data-v="c:${st.id}" title="${esc(st.name)}">
+          ${stickerSVG(st)}<span class="st-del" data-st-del="${st.id}" title="Verwijderen">×</span></button>`).join('');
+    if (!mine.length) hint = '<p class="st-hint">Teken iets, omcirkel het met de lasso en kies <b>Sticker</b>. Of voeg een SVG-bestand toe.</p>';
+  } else {
+    tiles = (STICKER_CATS.find(c => c[0] === cat) || STICKER_CATS[0])[2]
+      .map(k => `<button class="st-tile${o.stickerKey === k ? ' on' : ''}" data-k="stickerKey" data-v="${k}" title="${stickerLabel(k)}" aria-label="${stickerLabel(k)}">${stickerSVG({ key: k })}</button>`).join('');
+  }
+  return `<div class="st-tabs">${tabs}</div><div class="st-grid">${tiles}</div>${hint}`;
+}
+
+function uploadSticker() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.svg,image/svg+xml';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const st = stickerFromSVG(await file.text(), file.name.replace(/\.svg$/i, ''));
+      saveCustomSticker(st);
+      S.board?.setOpt('stickerKey', `c:${st.id}`);
+      renderSubbar();
+      toast('Sticker toegevoegd ✓');
+    } catch (e) {
+      toast(e.message, 'err');
+    }
+  };
+  input.click();
 }
 
 // ---------- account en synchronisatie ----------
@@ -999,7 +1088,7 @@ function route() {
   if (!store.session) return showLogin();
   const m = location.hash.match(/^#\/d\/(.+)$/);
   const doc = m && store.get(decodeURIComponent(m[1]));
-  if (doc && !doc.trashedAt) showEditor(doc);
+  if (doc && isDoc(doc) && !doc.trashedAt) showEditor(doc);
   else {
     if (m) history.replaceState(null, '', location.pathname + location.search);
     showLibrary();
@@ -1075,7 +1164,19 @@ function bindEvents() {
   $('zoomLabel').addEventListener('click', () => S.board.fit());
   $('zoomIn').addEventListener('click', () => S.board.zoomBy(1.25));
   $('zoomOut').addEventListener('click', () => S.board.zoomBy(0.8));
-  $('subbar').addEventListener('click', e => {
+  $('subbar').addEventListener('click', async e => {
+    const del = e.target.closest('[data-st-del]');
+    if (del) {
+      e.stopPropagation();
+      if (await confirmDialog('Sticker verwijderen?', 'Hij verdwijnt uit Mijn stickers. Waar je hem al geplakt hebt, blijft hij staan.')) {
+        removeCustomSticker(del.dataset.stDel);
+        renderSubbar();
+      }
+      return;
+    }
+    const tab = e.target.closest('[data-st-cat]');
+    if (tab) { S.board.setOpt('stickerCat', tab.dataset.stCat); renderSubbar(); return; }
+    if (e.target.closest('[data-st-upload]')) return uploadSticker();
     const b = e.target.closest('button[data-k]');
     if (!b) return;
     S.board.setOpt(b.dataset.k, 'num' in b.dataset ? Number(b.dataset.v) : b.dataset.v);
@@ -1165,6 +1266,7 @@ function bindEvents() {
   });
 }
 
+ensureStickerDefs();
 shell();
 bindEvents();
 renderStatus();

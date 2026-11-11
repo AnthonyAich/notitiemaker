@@ -17,6 +17,8 @@ De app is gemaakt met gewone HTML, CSS en JavaScript, zonder build-stap. Je host
 - **Lasso**: omcirkel handschrift (en blaadjes) om het te verplaatsen, groter of kleiner te maken (blauw bolletje), van kleur te veranderen, te dupliceren of te verwijderen.
 - **Sjablonen**: whiteboards als weekplanner, kanban, vergadering of mindmap; notebooks met Cornell- of weekplanner-papier.
 - **Tekstvakken** in handschriftstijl.
+- **Stickers** (`K`): 28 ingebouwde SVG-stickers (status, dingen, tape en accenten). Plakken, verslepen, groter maken en draaien met het bolletje erboven.
+  - **Eigen stickers**: teken iets, omcirkel het met de lasso en kies **Sticker**. Of voeg een SVG-bestand toe onder *Mijn stickers*. Je eigen stickers synchroniseren mee naar al je toestellen.
 - **Tabbladen**: open meerdere notebooks en whiteboards tegelijk. Met + open je een nieuw of bestaand document, met × sluit je een tabblad.
 - **Notebooks** met een kaft en gelinieerd, geruit, gestippeld of blanco papier. Nieuwe pagina's voeg je toe met de knop rechtsboven.
 - **Ongedaan maken / opnieuw** (⌘Z / ⇧⌘Z), een back-up als .json en het terugzetten ervan.
@@ -29,7 +31,7 @@ De app is gemaakt met gewone HTML, CSS en JavaScript, zonder build-stap. Je host
 - **Werkt offline**: na het eerste bezoek opent de app ook zonder internet.
 - **Op het beginscherm zetten** van je iPad: Safari → Deel → *Zet op beginscherm*. De app opent dan schermvullend.
 
-Sneltoetsen: `V` selecteren, `L` lasso, `P` pen, `H` markeerstift, `S` vormen, `E` gum, `T` tekst, `N` notitieblaadje, `⌘P` afdrukken, `0` alles in beeld, `+`/`-` zoomen, `⌫` verwijderen, `⌘D` dupliceren, spatiebalk ingedrukt houden om te verschuiven.
+Sneltoetsen: `V` selecteren, `L` lasso, `P` pen, `H` markeerstift, `S` vormen, `E` gum, `T` tekst, `N` notitieblaadje, `K` stickers, `⌘P` afdrukken, `0` alles in beeld, `+`/`-` zoomen, `⌫` verwijderen, `⌘D` dupliceren, spatiebalk ingedrukt houden om te verschuiven.
 
 ## Gebruikers
 
@@ -162,5 +164,6 @@ Open daarna <http://localhost:5173>. Dubbelklikken op `index.html` werkt niet, o
 | `js/versions.js` | Versiegeschiedenis op het toestel |
 | `js/ocr.js` | Handschrift omzetten naar afbeeldingen voor de tekstherkenning |
 | `js/fx.js` | Confetti |
+| `js/stickers.js` | Ingebouwde stickers, eigen stickers en het opschonen van SVG-uploads |
 | `sw.js` | Service worker om offline te werken |
 | `apps-script/Code.gs` | De Google Apps Script-backend |
