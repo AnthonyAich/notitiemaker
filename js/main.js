@@ -1,7 +1,7 @@
 // App-shell: bibliotheek, editor, instellingen en synchronisatiestatus.
 import { store } from './store.js';
 import { Board } from './board.js';
-import { newDoc, cloneDoc, docText, stickyStats, COVERS, PAPERS, STICKY_COLORS, INK_COLORS, HL_COLORS, BOARD_TEMPLATES } from './model.js';
+import { newDoc, cloneDoc, welcomeDoc, uid, docText, stickyStats, COVERS, PAPERS, STICKY_COLORS, INK_COLORS, HL_COLORS, BOARD_TEMPLATES } from './model.js';
 import { thumbSVG } from './thumb.js';
 import { printDoc } from './print.js';
 import { listVersions, getVersion, snapshot } from './versions.js';
@@ -444,6 +444,34 @@ function cardMenu(anchor, doc) {
     '-',
     { icon: 'trash', label: 'Naar prullenbak', danger: true, action: () => moveToTrash(doc) },
   ]);
+}
+
+// ---------- rondleiding ----------
+
+const welcomeId = () => `welkom-${store.session.id || store.session.username}`;
+
+// Opent de rondleiding; maakt ze opnieuw aan als ze weg is.
+function openWelcome() {
+  const existing = store.get(welcomeId());
+  if (existing) {
+    if (existing.trashedAt) { delete existing.trashedAt; store.save(existing); }
+    return openDoc(existing.id);
+  }
+  const doc = welcomeDoc(store.session.id || store.session.username);
+  // Was ze ooit definitief verwijderd, dan is de vaste id bezet.
+  if (store.docs[doc.id]) doc.id = uid();
+  store.save(doc);
+  openDoc(doc.id);
+}
+
+// Wie (na de eerste synchronisatie) nog geen enkel document heeft, krijgt de rondleiding.
+function maybeWelcome() {
+  if (S.welcomeChecked || !store.session || store.status.state !== 'ok') return;
+  S.welcomeChecked = true;
+  if (Object.keys(store.docs).length) return;
+  const doc = welcomeDoc(store.session.id || store.session.username);
+  store.save(doc);
+  if (!S.doc) openDoc(doc.id);
 }
 
 // ---------- tabbladen ----------
@@ -989,6 +1017,7 @@ function bindEvents() {
     { icon: 'book', label: 'Notebook', action: askNotebook },
     { icon: 'board', label: 'Whiteboard', action: askBoard },
     '-',
+    { icon: 'help', label: 'Rondleiding', action: openWelcome },
     { icon: 'upload', label: 'Importeren (.json)', action: importFile },
   ]));
   $('trashNote').addEventListener('click', e => { if (e.target.closest('#emptyTrash')) emptyTrash(); });
@@ -1079,7 +1108,7 @@ function bindEvents() {
   });
   setInterval(() => { if (!document.hidden) store.sync(); }, 60000);
 
-  store.addEventListener('status', renderStatus);
+  store.addEventListener('status', () => { renderStatus(); maybeWelcome(); });
   const reportedBroken = new Set();
   store.addEventListener('broken', e => {
     const fresh = e.detail.titles.filter(t => !reportedBroken.has(t));
@@ -1108,6 +1137,7 @@ function bindEvents() {
       : `${list.length} documenten werden intussen op een ander toestel gewijzigd. Jouw versies staan apart als conflictkopie.`, 'warn');
   });
   store.addEventListener('session', () => {
+    S.welcomeChecked = false;
     renderStatus();
     if (store.session) startSession();
     else showLogin();

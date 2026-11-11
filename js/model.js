@@ -56,7 +56,7 @@ function weekDates() {
 }
 
 const sticky = (x, y, color, title, lines = [], w = 260, h = 200) =>
-  ({ id: uid(), kind: 'sticky', x, y, w, h, color, title, lines: lines.map(t => ({ text: t, indent: 0, hl: false })) });
+  ({ id: uid(), kind: 'sticky', x, y, w, h, color, title, lines: lines.map(t => ({ text: t.trim(), indent: t.startsWith('  ') ? 1 : 0, hl: false })) });
 const label = (x, y, text, size = 34) => ({ id: uid(), kind: 'text', x, y, text, size, color: '#1d1d1f' });
 const shape = (kind, a, b, color = '#1d1d1f', width = 3) => ({ id: uid(), tool: 'pen', shape: kind, color, width, points: [a, b] });
 
@@ -118,6 +118,65 @@ export const BOARD_TEMPLATES = {
 
 export function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+// Rondleiding voor nieuwe gebruikers. De vaste id voorkomt dubbele exemplaren
+// als iemand op twee toestellen tegelijk voor het eerst inlogt.
+export function welcomeDoc(userId) {
+  const now = new Date();
+  const today = `${now.getDate()}/${now.getMonth() + 1}`;
+  const W = 320, gap = 30, col = i => i * (W + gap), row2 = 340;
+  const items = [
+    label(0, -130, 'Welkom bij Notitiemaker 👋', 58),
+    label(4, -56, 'Een korte rondleiding. Alles hier mag je aanpassen, verslepen of weggooien.', 26),
+    sticky(col(0), 0, 'geel', 'Begin hier', [
+      'Kies bovenaan het pijltje',
+      'Tik op een regel om ze te markeren',
+      'Dubbeltik op een blaadje om te bewerken',
+      'Sleep een blaadje om het te verplaatsen',
+      'Blauw bolletje = groter of kleiner',
+    ], W, 280),
+    sticky(col(1), 0, 'blauw', 'Tekenen', [
+      'Pen, markeerstift en gum staan bovenaan',
+      'Hou de pen even stil aan het einde',
+      '  = een rechte lijn of nette vorm',
+      'Vormen en pijlen: het vormen-icoon',
+      'Lasso: omcirkel om te verplaatsen',
+      'Met een Apple Pencil schuift je vinger',
+    ], W, 280),
+    sticky(col(2), 0, 'groen', 'Rondkijken', [
+      'Knijpen om in en uit te zoomen',
+      'Twee vingers slepen om te schuiven',
+      'Computer: scrollen, of ⌘ + scrollen om te zoomen',
+      'Het kader-icoon zet alles in beeld',
+    ], W, 280),
+    sticky(col(0), row2, 'roze', 'Documenten', [
+      'Nieuw: een notebook of whiteboard',
+      'Kies een sjabloon: weekplanner, kanban, …',
+      '+ bovenaan opent een extra tabblad',
+      'Weggegooid? Kijk in de prullenbak',
+      'Klik op de documentnaam voor versies en PDF',
+    ], W, 280),
+    sticky(col(1), row2, 'paars', 'Handig om te weten', [
+      'Alles synchroniseert vanzelf met je andere toestellen',
+      'Werkt ook zonder internet',
+      'Zoeken vindt ook je handschrift',
+      'iPad: Deel → Zet op beginscherm',
+      'Je naam linksonder: account en wachtwoord',
+    ], W, 280),
+    sticky(col(2), row2, 'oranje', 'Probeer het zelf', [
+      `${today}: deze rondleiding bekijken`,
+      'Tik op deze regel',
+      'En op deze',
+      'Alles gemarkeerd? Kijk wat er gebeurt',
+    ], W, 280),
+    label(col(3) + 20, 6, 'Teken hier iets ✍️', 34),
+  ];
+  const strokes = [
+    shape('rect', [col(3), 0], [col(3) + 380, row2 + 280], '#9aa6b8', 4),
+    shape('arrow', [col(2) + W + 6, row2 + 150], [col(3) + 110, row2 + 70], '#5f6b7a', 3),
+  ];
+  return { ...newDoc('board', 'Welkom bij Notitiemaker'), id: `welkom-${userId}`, content: { items, strokes } };
 }
 
 export function newDoc(type, title, opts = {}) {

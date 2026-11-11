@@ -25,6 +25,7 @@ De app is gemaakt met gewone HTML, CSS en JavaScript, zonder build-stap. Je host
 - **Versiegeschiedenis** (documentmenu → Versiegeschiedenis): terug naar een eerdere versie. Versies worden bewaard op je toestel en in de Google Sheet.
 - **Zoeken in handschrift**: je handschrift wordt herkend met Google tekstherkenning, zodat de zoekbalk het ook vindt.
 - **Gebruikers**: iedereen logt in met een eigen gebruikersnaam en wachtwoord en ziet alleen de eigen documenten.
+- **Rondleiding**: wie nog geen documenten heeft, krijgt bij de eerste login een whiteboard *Welkom bij Notitiemaker* met uitleg en een oefenblaadje. Terug te openen via **Nieuw → Rondleiding**.
 - **Werkt offline**: na het eerste bezoek opent de app ook zonder internet.
 - **Op het beginscherm zetten** van je iPad: Safari → Deel → *Zet op beginscherm*. De app opent dan schermvullend.
 
