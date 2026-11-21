@@ -16,11 +16,14 @@ De app is gemaakt met gewone HTML, CSS en JavaScript, zonder build-stap. Je host
 - **Vormen en pijlen**: pijl, lijn, rechthoek en ellips. Hou Shift ingedrukt voor een vierkant of cirkel.
 - **Lasso**: omcirkel handschrift (en blaadjes) om het te verplaatsen, groter of kleiner te maken (blauw bolletje), van kleur te veranderen, te dupliceren of te verwijderen.
 - **Sjablonen**: whiteboards als weekplanner, kanban, vergadering of mindmap; notebooks met Cornell- of weekplanner-papier.
+- **Mindmaps**: selecteer een blaadje en tik op een **+** voor een nieuw, verbonden idee. Sleep een **+** naar een ander blaadje om ze te verbinden, of naar een lege plek voor een nieuw idee daar. Versleep je een blaadje, dan gaan zijn takken mee; *Losmaken* in de balk haalt een blaadje uit de mindmap.
 - **Tekstvakken** in handschriftstijl.
 - **Stickers** (`K`): 28 ingebouwde SVG-stickers (status, dingen, tape en accenten). Plakken, verslepen, groter maken en draaien met het bolletje erboven.
   - **Eigen stickers**: teken iets, omcirkel het met de lasso en kies **Sticker**. Of voeg een SVG-bestand toe onder *Mijn stickers*. Je eigen stickers synchroniseren mee naar al je toestellen.
 - **Tabbladen**: open meerdere notebooks en whiteboards tegelijk. Met + open je een nieuw of bestaand document, met × sluit je een tabblad.
 - **Notebooks** met een kaft en gelinieerd, geruit, gestippeld of blanco papier. Nieuwe pagina's voeg je toe met de knop rechtsboven.
+  - **Pagina's ordenen**: de knop *Pagina's* toont alle pagina's als miniatuur. Sleep een pagina aan ⠿ naar een andere plek, of dupliceer, verwijder of voeg een lege pagina in. Alles op een pagina verhuist mee.
+  - **Typen op de lijnen**: op gelinieerd, Cornell-, geruit of gestippeld papier begint tekst op de dichtstbijzijnde lijn. Enter gaat naar de volgende lijn en lange zinnen lopen vanzelf door; versleep je de tekst, dan valt ze weer op de lijnen.
 - **Ongedaan maken / opnieuw** (⌘Z / ⇧⌘Z), een back-up als .json en het terugzetten ervan.
 - **Afdrukken of opslaan als PDF** (⌘P of het printer-icoon): een notebook wordt één A4 per pagina, een whiteboard past op één liggende A4. Kies in het afdrukvenster *Opslaan als PDF*.
 - **Prullenbak**: verwijderde documenten blijven 30 dagen bewaard en kun je terugzetten.
@@ -161,6 +164,7 @@ Open daarna <http://localhost:5173>. Dubbelklikken op `index.html` werkt niet, o
 | `js/model.js` | Kleuren, kaften en het datamodel |
 | `js/ink.js`, `js/thumb.js` | Pennenstreken, vormen, vormherkenning en miniaturen |
 | `js/print.js` | Afdrukken en PDF |
+| `js/pages.js` | Pagina-overzicht van een notebook |
 | `js/versions.js` | Versiegeschiedenis op het toestel |
 | `js/ocr.js` | Handschrift omzetten naar afbeeldingen voor de tekstherkenning |
 | `js/fx.js` | Confetti |

@@ -5,6 +5,60 @@ export const PAGE_W = 820;
 export const PAGE_H = 1160;
 export const PAGE_GAP = 48;
 export const pageTop = i => i * (PAGE_H + PAGE_GAP);
+// Op welke pagina ligt deze hoogte (in wereldcoördinaten)?
+export const pageIndexAt = y => Math.max(0, Math.floor((y + PAGE_GAP / 2) / (PAGE_H + PAGE_GAP)));
+
+// Lijnenpatroon per papiersoort: waar de eerste lijn ligt (vanaf de bovenkant van de pagina)
+// en de afstand tussen de lijnen. Getypte tekst valt tussen twee lijnen.
+export const PAPER_LINES = {
+  lijnen: { first: 20, step: 40 },
+  cornell: { first: 20, step: 40 },
+  ruitjes: { first: 0, step: 30 },
+  puntjes: { first: 15, step: 30 },
+};
+
+const CORNELL_SPLIT = 220;   // de verticale lijn van de kantlijn
+const CORNELL_SUMMARY = 900; // de lijn boven de samenvatting
+const MARGIN = 24;
+
+// Waar komt getypte tekst op een notebookpagina met lijnen? null = vrij plaatsen.
+export function snapToPaper(doc, wx, wy) {
+  if (doc?.type !== 'notebook') return null;
+  const page = pageIndexAt(wy);
+  const lines = PAPER_LINES[doc.paper || 'lijnen'];
+  if (!page || page >= (doc.content.pages || 1) || !lines) return null;
+  const top = pageTop(page);
+  const localY = Math.min(Math.max(wy - top, lines.first), PAGE_H - lines.step);
+  const k = Math.floor((localY - lines.first) / lines.step);
+  let x = Math.min(Math.max(wx, MARGIN), PAGE_W - 120);
+  let right = PAGE_W - MARGIN;
+  if (doc.paper === 'cornell' && localY < CORNELL_SUMMARY) {
+    // Links van de kantlijn loopt de tekst door tot aan de kantlijn.
+    if (x < CORNELL_SPLIT) right = CORNELL_SPLIT - 8;
+    else x = Math.max(x, CORNELL_SPLIT + 8);
+  }
+  return { x: Math.round(x), y: Math.round(top + lines.first + k * lines.step), w: Math.round(right - x), lh: lines.step };
+}
+
+// Hoeveel pagina's zijn er minstens nodig om alle inhoud te tonen?
+export function pagesNeeded(content) {
+  let last = 0;
+  for (const it of content?.items || []) last = Math.max(last, pageIndexAt(it.y + (it.h || it.lh || 40) / 2));
+  for (const s of content?.strokes || []) if (s.points?.length) last = Math.max(last, pageIndexAt(s.points[0][1]));
+  return last + 1;
+}
+
+// Gebogen verbindingslijn tussen twee blaadjes van een mindmap (rechthoeken {x, y, w, h}).
+export function linkPath(a, b) {
+  const ax = a.x + a.w / 2, ay = a.y + a.h / 2, bx = b.x + b.w / 2, by = b.y + b.h / 2;
+  const r = v => Math.round(v);
+  if (Math.abs(bx - ax) >= Math.abs(by - ay)) {
+    const sx = bx > ax ? a.x + a.w : a.x, ex = bx > ax ? b.x : b.x + b.w, mx = (sx + ex) / 2;
+    return `M${r(sx)} ${r(ay)}C${r(mx)} ${r(ay)} ${r(mx)} ${r(by)} ${r(ex)} ${r(by)}`;
+  }
+  const sy = by > ay ? a.y + a.h : a.y, ey = by > ay ? b.y : b.y + b.h, my = (sy + ey) / 2;
+  return `M${r(ax)} ${r(sy)}C${r(ax)} ${r(my)} ${r(bx)} ${r(my)} ${r(bx)} ${r(ey)}`;
+}
 
 // Notitieblaadjes: achtergrond + markeerkleur voor regels.
 export const STICKY_COLORS = {
@@ -104,14 +158,13 @@ export const BOARD_TEMPLATES = {
   },
   mindmap: {
     label: 'Mindmap',
-    hint: 'Een centraal idee met vier takken',
+    hint: 'Een centraal idee met vier takken. Met + maak je er meer.',
     make: () => {
       const c = sticky(380, 260, 'oranje', 'Centraal idee', [], 240, 120);
       const arms = [[0, 0, 'geel'], [760, 0, 'blauw'], [0, 520, 'groen'], [760, 520, 'paars']];
-      const items = [c, ...arms.map(([x, y, col], i) => sticky(x, y, col, `Idee ${i + 1}`, [], 240, 140))];
-      const strokes = [[370, 270, 250, 150], [630, 270, 750, 150], [370, 380, 250, 510], [630, 380, 750, 510]]
-        .map(([ax, ay, bx, by]) => shape('arrow', [ax, ay], [bx, by], '#5f6b7a', 3));
-      return { items, strokes };
+      // `parent` verbindt een tak met het centrale idee; de lijn wordt vanzelf getekend.
+      const items = [c, ...arms.map(([x, y, col], i) => ({ ...sticky(x, y, col, `Idee ${i + 1}`, [], 240, 140), parent: c.id }))];
+      return { items, strokes: [] };
     },
   },
 };
@@ -124,14 +177,19 @@ export function uid() {
 // als iemand op twee toestellen tegelijk voor het eerst inlogt.
 // Verhoog WELCOME_VERSION telkens de inhoud verandert: via Nieuw → Rondleiding
 // krijgt een verouderde rondleiding dan de nieuwe inhoud.
-export const WELCOME_VERSION = 3;
+export const WELCOME_VERSION = 4;
 
 const welcomeSticker = (key, x, y, size, rot) => ({ id: uid(), kind: 'sticker', key, x, y, w: size, h: size, rot });
 
 export function welcomeContent() {
   const now = new Date();
   const today = `${now.getDate()}/${now.getMonth() + 1}`;
-  const W = 320, gap = 30, col = i => i * (W + gap), row2 = 340;
+  const W = 320, gap = 30, col = i => i * (W + gap), row2 = 340, row3 = 680;
+  const mindmap = sticky(col(1), row3, 'oranje', 'Mindmap', [
+    'Selecteer dit blaadje en tik op een +',
+    'Sleep een + naar een ander blaadje om ze te verbinden',
+    'Versleep mij: mijn takken gaan mee',
+  ], W, 200);
   const items = [
     label(0, -130, 'Welkom bij Notitiemaker 👋', 58),
     label(4, -56, 'Een korte rondleiding. Alles hier mag je aanpassen, verslepen of weggooien.', 26),
@@ -184,6 +242,13 @@ export function welcomeContent() {
       'Eigen sticker: teken iets, omcirkel het met de lasso en kies Sticker',
       'Of voeg een SVG-bestand toe',
     ], W, 280),
+    sticky(col(0), row3, 'groen', 'Notebooks', [
+      'Pagina\'s-knop: pagina\'s verslepen, kopiëren of verwijderen',
+      'Typ je op een gelinieerde pagina, dan staat de tekst op de lijnen',
+      'Enter gaat naar de volgende lijn',
+    ], W, 200),
+    mindmap,
+    { ...sticky(col(2) + 60, row3 + 30, 'blauw', 'Een tak', ['Ik beweeg mee met Mindmap'], 260, 120), parent: mindmap.id },
     label(col(3) + 20, 6, 'Teken hier iets ✍️', 34),
     // Een paar echte stickers, als voorbeeld.
     welcomeSticker('raket', 600, -170, 84, 12),

@@ -1,7 +1,7 @@
 // Het canvas: oneindig whiteboard of notebook met pagina's.
 // Wereldcoördinaten worden met translate + scale op het scherm gezet.
 import { strokePath, hitStroke, strokeBBox, strokeInPolygon, pointInPolygon, recognizeShape } from './ink.js';
-import { PAGE_W, PAGE_H, STICKY_COLORS, INK_COLORS, coverSVG, weekPageSVG, pageTop, uid, lineDate } from './model.js';
+import { PAGE_W, PAGE_H, STICKY_COLORS, INK_COLORS, coverSVG, weekPageSVG, pageTop, pageIndexAt, snapToPaper, linkPath, uid, lineDate } from './model.js';
 import { confetti } from './fx.js';
 import { stickerParts, stickerFromStrokes } from './stickers.js';
 import { esc, icon } from './ui.js';
@@ -13,6 +13,8 @@ const OPTS_KEY = 'notitiemaker.tools.v1';
 const VIEW_KEY = 'notitiemaker.view.';
 const MAX_UNDO = 60;
 const HOLD_MS = 550;
+// Kleuren voor nieuwe takken van een mindmap (subtakken krijgen de kleur van hun tak).
+const BRANCH_COLORS = ['geel', 'blauw', 'groen', 'paars', 'roze', 'oranje'];
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const r1 = v => Math.round(v * 10) / 10;
@@ -89,7 +91,8 @@ function itemHTML(it, selected) {
     const lines = (it.lines || []).map((l, i) =>
       `<li data-i="${i}" class="lvl-${l.indent || 0}${l.hl ? ' hl' : ''}"><span>${lineHTML(l)}</span></li>`).join('');
     return `<div class="item sticky${sel}" data-id="${it.id}" style="left:${it.x}px;top:${it.y}px;width:${it.w}px;min-height:${it.h}px;--bg:${col.bg};--hl:${col.hl}">
-      <div class="sticky-title">${esc(it.title)}</div><ul class="sticky-lines">${lines}</ul><div class="handle"></div></div>`;
+      <div class="sticky-title">${esc(it.title)}</div><ul class="sticky-lines">${lines}</ul><div class="handle"></div>
+      ${['t', 'r', 'b', 'l'].map(d => `<div class="mm-add mm-${d}" data-dir="${d}" title="Nieuw verbonden idee (of sleep naar een blaadje)">+</div>`).join('')}</div>`;
   }
   if (it.kind === 'sticker') {
     const p = stickerParts(it);
@@ -97,8 +100,26 @@ function itemHTML(it, selected) {
       <svg viewBox="${p.vb}" preserveAspectRatio="xMidYMid meet"><g${p.cut ? ' filter="url(#sticker-cut)"' : ''}>${p.body}</g></svg>
       <div class="handle"></div><div class="rot-handle" title="Draaien"></div></div>`;
   }
-  return `<div class="item text${sel}" data-id="${it.id}" style="left:${it.x}px;top:${it.y}px;font-size:${it.size}px;color:${esc(it.color)}">${esc(it.text)}</div>`;
+  // Tekst op de lijnen van een notebookpagina: vaste regelafstand en een breedte om af te breken.
+  const lined = it.lh ? `--lh:${it.lh}px;width:${it.w}px;` : '';
+  return `<div class="item text${sel}${it.lh ? ' lined' : ''}" data-id="${it.id}" style="${lined}left:${it.x}px;top:${it.y}px;font-size:${it.size}px;color:${esc(it.color)}">${esc(it.text)}</div>`;
 }
+
+// De verbindingslijnen van mindmaps: van elk blaadje met een `parent` naar dat parent-blaadje.
+function linksHTML(items, rectOf) {
+  let html = '';
+  for (const it of items) {
+    if (!it.parent) continue;
+    const a = rectOf(it.parent), b = rectOf(it.id);
+    if (!a || !b) continue;
+    const col = STICKY_COLORS[it.color] || STICKY_COLORS.geel;
+    html += `<path d="${linkPath(a, b)}" stroke="${col.hl}"/>`;
+  }
+  return html;
+}
+
+// Afmetingen zonder DOM (afdrukken, overzichten): de bewaarde breedte en minimale hoogte.
+const storedRect = it => it && { x: it.x, y: it.y, w: it.w || 200, h: Math.max(it.h || 0, 56 + (it.lines?.length || 0) * 26) };
 
 const pathCache = new WeakMap();
 function strokeHTML(s) {
@@ -125,7 +146,9 @@ export function worldHTML(doc, page = null) {
     strokes = strokes.filter(s => { const b = strokeBBox(s); return b.y < bottom && b.y + b.h > top; });
   }
   const ink = inkHTML(strokes);
+  const byId = new Map(items.map(it => [it.id, it]));
   return `<div class="pages-layer">${pagesHTML(doc, page)}</div>
+    <svg class="links-layer" width="1" height="1">${linksHTML(items, id => storedRect(byId.get(id)))}</svg>
     <div class="items-layer">${items.map(it => itemHTML(it, null)).join('')}</div>
     <svg class="ink-layer" width="1" height="1"><g class="ink-hl">${ink.hl}</g><g class="ink-pen">${ink.pen}</g></svg>`;
 }
@@ -152,6 +175,7 @@ export class Board {
     this.el.innerHTML = `
       <div class="world">
         <div class="pages-layer"></div>
+        <svg class="links-layer" width="1" height="1"></svg>
         <div class="items-layer"></div>
         <svg class="ink-layer" width="1" height="1"><g class="ink-hl"></g><g class="ink-pen"></g><g class="ink-live"></g></svg>
         <div class="lasso-box" hidden><div class="lasso-handle"></div></div>
@@ -161,6 +185,7 @@ export class Board {
     this.world = this.el.querySelector('.world');
     this.pagesLayer = this.el.querySelector('.pages-layer');
     this.itemsLayer = this.el.querySelector('.items-layer');
+    this.linksLayer = this.el.querySelector('.links-layer');
     this.gHl = this.el.querySelector('.ink-hl');
     this.gPen = this.el.querySelector('.ink-pen');
     this.gLive = this.el.querySelector('.ink-live');
@@ -170,6 +195,8 @@ export class Board {
     this.bind();
     this.setTool(this.tool);
     this.load(doc, true);
+    // Blaadjes worden pas definitief hoog als het lettertype geladen is.
+    document.fonts?.ready.then(() => this.renderLinks());
   }
 
   // ---------- document ----------
@@ -365,8 +392,15 @@ export class Board {
 
   renderItems() {
     this.itemsLayer.innerHTML = this.c.items.map(it => itemHTML(it, this.selected)).join('');
+    this.renderLinks();
     this.renderLasso();
     this.updateBar();
+  }
+
+  renderLinks() {
+    const rects = new Map();
+    for (const it of this.c.items) if (it.kind === 'sticky') rects.set(it.id, this.itemRect(it));
+    this.linksLayer.innerHTML = linksHTML(this.c.items, id => rects.get(id));
   }
 
   renderInk() {
@@ -434,6 +468,7 @@ export class Board {
             `<button class="swatch${it.color === k ? ' on' : ''}" data-act="color" data-v="${k}" style="--c:${c.bg}" title="${k}"></button>`).join('')
           : colors(INK_COLORS).map(c =>
             `<button class="swatch${it.color === c ? ' on' : ''}" data-act="color" data-v="${c}" style="--c:${c}"></button>`).join('');
+        if (it.parent && this.item(it.parent)) h += `<span class="sep"></span><button data-act="unlink" title="Losmaken uit de mindmap">${icon('unlink')}</button>`;
         h += `${it.kind === 'sticker' ? '' : '<span class="sep"></span>'}
           <button data-act="front" title="Naar voren">${icon('front')}</button>
           <button data-act="dup" title="Dupliceren (⌘D)">${icon('copy')}</button>
@@ -448,18 +483,20 @@ export class Board {
 
   positionBar() {
     if (this.bar.hidden) return;
-    let r = null;
+    let r = null, room = 0;
     if (this.tool === 'lasso') r = this.lassoRect();
     else {
       const it = this.item(this.selected);
       if (it) r = this.itemRect(it);
+      // Boven en onder een blaadje staat een + voor de mindmap; de balk komt daarbuiten.
+      if (it?.kind === 'sticky') room = 46 * this.view.z;
     }
     if (!r) return;
     const { x, y, z } = this.view;
     const cx = clamp(x + (r.x + r.w / 2) * z, 120, this.el.clientWidth - 120);
-    let top = y + r.y * z - 18;
+    let top = y + r.y * z - 18 - room;
     const below = top < 110;
-    if (below) top = y + (r.y + r.h) * z + 18;
+    if (below) top = y + (r.y + r.h) * z + 18 + room;
     this.bar.classList.toggle('below', below);
     this.bar.style.left = `${cx}px`;
     this.bar.style.top = `${top}px`;
@@ -475,6 +512,7 @@ export class Board {
     if (act === 'edit') return this.startEdit(it.id);
     this.pushUndo(this.snapshot());
     if (act === 'color') it.color = v;
+    if (act === 'unlink') delete it.parent;
     if (act === 'front') {
       this.c.items = this.c.items.filter(i => i !== it).concat(it);
     }
@@ -498,6 +536,7 @@ export class Board {
   deleteSelected(undoPushed = false) {
     if (!this.selected) return;
     if (!undoPushed) this.pushUndo(this.snapshot());
+    this.detach(new Set([this.selected]));
     this.c.items = this.c.items.filter(i => i.id !== this.selected);
     this.selected = null;
     this.renderItems();
@@ -521,7 +560,9 @@ export class Board {
     const p = this.lassoParts();
     const shift = ([x, y]) => [r1(x + 24), r1(y + 24)];
     const strokes = p.strokes.map(s => ({ ...s, id: uid(), points: s.points.map(shift) }));
-    const items = p.items.map(it => ({ ...JSON.parse(JSON.stringify(it)), id: uid(), x: it.x + 24, y: it.y + 24 }));
+    const ids = new Map(p.items.map(it => [it.id, uid()]));
+    const items = p.items.map(it => ({ ...JSON.parse(JSON.stringify(it)), id: ids.get(it.id), x: it.x + 24, y: it.y + 24 }));
+    for (const it of items) if (ids.has(it.parent)) it.parent = ids.get(it.parent);
     this.c.strokes.push(...strokes);
     this.c.items.push(...items);
     this.lasso = { strokes: new Set(strokes.map(s => s.id)), items: new Set(items.map(i => i.id)) };
@@ -534,6 +575,7 @@ export class Board {
     if (!this.lasso) return;
     this.pushUndo(this.snapshot());
     const { strokes, items } = this.lasso;
+    this.detach(items);
     this.c.strokes = this.c.strokes.filter(s => !strokes.has(s.id));
     this.c.items = this.c.items.filter(i => !items.has(i.id));
     this.lasso = null;
@@ -555,7 +597,10 @@ export class Board {
       if (!o) continue;
       [it.x, it.y] = tf([o.x, o.y]).map(Math.round);
       if (k !== 1) {
-        if (it.kind === 'text') it.size = Math.max(8, Math.round(o.size * k));
+        if (it.kind === 'text') {
+          it.size = Math.max(8, Math.round(o.size * k));
+          if (o.lh) { it.lh = Math.round(o.lh * k); it.w = Math.round(o.w * k); }
+        }
         else if (it.kind === 'sticker') { const f = Math.max(k, 16 / Math.min(o.w, o.h)); it.w = Math.round(o.w * f); it.h = Math.round(o.h * f); }
         else { it.w = Math.max(140, Math.round(o.w * k)); it.h = Math.max(80, Math.round(o.h * k)); }
       }
@@ -567,10 +612,13 @@ export class Board {
       if (!el) continue;
       el.style.left = `${it.x}px`;
       el.style.top = `${it.y}px`;
-      if (it.kind === 'text') el.style.fontSize = `${it.size}px`;
-      else if (it.kind === 'sticker') { el.style.width = `${it.w}px`; el.style.height = `${it.h}px`; }
+      if (it.kind === 'text') {
+        el.style.fontSize = `${it.size}px`;
+        if (it.lh) { el.style.setProperty('--lh', `${it.lh}px`); el.style.width = `${it.w}px`; }
+      } else if (it.kind === 'sticker') { el.style.width = `${it.w}px`; el.style.height = `${it.h}px`; }
       else { el.style.width = `${it.w}px`; el.style.minHeight = `${it.h}px`; }
     }
+    this.renderLinks();
     this.renderLasso();
     this.positionBar();
   }
@@ -579,7 +627,7 @@ export class Board {
     const p = this.lassoParts();
     return {
       strokes: new Map(p.strokes.map(s => [s.id, { points: s.points, width: s.width }])),
-      items: new Map(p.items.map(i => [i.id, { x: i.x, y: i.y, w: i.w, h: i.h, size: i.size }])),
+      items: new Map(p.items.map(i => [i.id, { x: i.x, y: i.y, w: i.w, h: i.h, size: i.size, lh: i.lh }])),
     };
   }
 
@@ -609,6 +657,135 @@ export class Board {
     this.changed();
   }
 
+  // ---------- mindmap ----------
+
+  // Alle blaadjes die (via tussenstappen) aan dit blaadje hangen.
+  descendants(id) {
+    const kids = new Map();
+    for (const it of this.c.items) if (it.parent) kids.set(it.parent, [...(kids.get(it.parent) || []), it.id]);
+    const out = [], seen = new Set([id]), todo = [...(kids.get(id) || [])];
+    while (todo.length) {
+      const c = todo.pop();
+      if (seen.has(c)) continue;
+      seen.add(c);
+      out.push(c);
+      todo.push(...(kids.get(c) || []));
+    }
+    return out;
+  }
+
+  // Wie aan verwijderde blaadjes hing, hangt voortaan aan het eerstvolgende blaadje erboven.
+  detach(removed) {
+    const parentOf = id => this.item(id)?.parent;
+    for (const it of this.c.items) {
+      if (removed.has(it.id) || !removed.has(it.parent)) continue;
+      let p = it.parent;
+      const seen = new Set();
+      while (p && removed.has(p) && !seen.has(p)) { seen.add(p); p = parentOf(p); }
+      if (p && !removed.has(p)) it.parent = p;
+      else delete it.parent;
+    }
+  }
+
+  // Nieuw verbonden blaadje naast `srcId`, in richting `dir` of op de plek `at`.
+  addChild(srcId, dir, at = null) {
+    const src = this.item(srcId);
+    if (!src) return;
+    const snap = this.snapshot();
+    const sr = this.itemRect(src);
+    const w = 220, h = 110, gap = 90;
+    const siblings = this.c.items.filter(i => i.parent === srcId).map(i => ({ it: i, r: this.itemRect(i) }));
+    let x, y;
+    if (at) {
+      [x, y] = [at[0] - w / 2, at[1] - h / 2];
+    } else if (dir === 'l' || dir === 'r') {
+      x = dir === 'r' ? sr.x + sr.w + gap : sr.x - gap - w;
+      // Onder de takken die al aan die kant staan.
+      const side = siblings.filter(s => (dir === 'r' ? s.r.x >= sr.x + sr.w : s.r.x + s.r.w <= sr.x));
+      y = side.length ? Math.max(...side.map(s => s.r.y + s.r.h)) + 24 : sr.y + sr.h / 2 - h / 2;
+    } else {
+      y = dir === 'b' ? sr.y + sr.h + gap : sr.y - gap - h;
+      const side = siblings.filter(s => (dir === 'b' ? s.r.y >= sr.y + sr.h : s.r.y + s.r.h <= sr.y));
+      x = side.length ? Math.max(...side.map(s => s.r.x + s.r.w)) + 24 : sr.x + sr.w / 2 - w / 2;
+    }
+    // Een nieuwe hoofdtak krijgt een eigen kleur; een subtak de kleur van zijn tak.
+    const palette = BRANCH_COLORS.filter(c => c !== src.color);
+    const color = src.parent ? src.color : palette[siblings.length % palette.length];
+    const it = { id: uid(), kind: 'sticky', x: Math.round(x), y: Math.round(y), w, h, color, title: '', lines: [], parent: srcId };
+    this.c.items.push(it);
+    this.renderItems();
+    this.startEdit(it.id, { isNew: true, snap });
+  }
+
+  // Verbindt blaadje `childId` met `parentId` (tenzij dat een kring zou maken).
+  linkTo(childId, parentId) {
+    if (childId === parentId || this.descendants(childId).includes(parentId)) {
+      this.cb.onMessage?.('Die twee zijn al met elkaar verbonden.');
+      return;
+    }
+    this.pushUndo(this.snapshot());
+    this.item(childId).parent = parentId;
+    this.renderItems();
+    this.changed();
+  }
+
+  // ---------- pagina's van een notebook ----------
+
+  // Herschikt de pagina's. `order` = de oude paginanummers in de nieuwe volgorde (0 = kaft):
+  // een nummer dat twee keer voorkomt wordt gekopieerd, een ontbrekend nummer verwijderd,
+  // en -1 is een nieuwe lege pagina. Alles op een pagina verhuist mee.
+  reorderPages(order) {
+    if (!this.isNotebook) return;
+    this.finishEdit();
+    this.pushUndo(this.snapshot());
+    const last = (this.c.pages || 1) - 1;
+    const pageOf = y => Math.min(pageIndexAt(y), last);
+    const targets = new Map();
+    order.forEach((p, k) => { if (p >= 0) targets.set(p, [...(targets.get(p) || []), k]); });
+    const items = [], strokes = [];
+    const copyIds = new Map(); // per nieuwe pagina: oude id → nieuwe id (voor mindmaplijnen)
+    for (const it of this.c.items) {
+      const r = this.itemRect(it), p = pageOf(r.y + r.h / 2), y0 = it.y;
+      (targets.get(p) || []).forEach((k, n) => {
+        const copy = n ? { ...JSON.parse(JSON.stringify(it)), id: uid() } : it;
+        if (n) copyIds.set(`${k}:${it.id}`, copy.id);
+        copy.y = Math.round(y0 + pageTop(k) - pageTop(p));
+        copy._page = k;
+        items.push(copy);
+      });
+    }
+    for (const it of items) {
+      if (it.parent && copyIds.has(`${it._page}:${it.parent}`)) it.parent = copyIds.get(`${it._page}:${it.parent}`);
+      delete it._page;
+    }
+    for (const st of this.c.strokes) {
+      const b = strokeBBox(st), p = pageOf(b.y + b.h / 2);
+      (targets.get(p) || []).forEach((k, n) => {
+        const dy = pageTop(k) - pageTop(p);
+        strokes.push({ ...st, id: n ? uid() : st.id, points: st.points.map(([x, y]) => [x, r1(y + dy)]) });
+      });
+    }
+    this.c.items = items;
+    this.c.strokes = strokes;
+    this.c.pages = order.length;
+    this.selected = null;
+    this.lasso = null;
+    this.renderAll();
+    this.changed();
+  }
+
+  pageHasContent(i) {
+    const last = (this.c.pages || 1) - 1;
+    const pageOf = y => Math.min(pageIndexAt(y), last);
+    return this.c.items.some(it => { const r = this.itemRect(it); return pageOf(r.y + r.h / 2) === i; })
+      || this.c.strokes.some(st => { const b = strokeBBox(st); return pageOf(b.y + b.h / 2) === i; });
+  }
+
+  goToPage(i) {
+    this.view.y = 24 - pageTop(i) * this.view.z;
+    this.applyView();
+  }
+
   addPage() {
     if (!this.isNotebook) return;
     this.finishEdit();
@@ -624,7 +801,11 @@ export class Board {
 
   addText(wx, wy) {
     const snap = this.snapshot();
-    const it = { id: uid(), kind: 'text', x: Math.round(wx), y: Math.round(wy - this.opts.textSize * 0.6), text: '', size: this.opts.textSize, color: this.opts.textColor };
+    // Op gelinieerd (of geruit) papier begint de tekst op de dichtstbijzijnde lijn.
+    const line = snapToPaper(this.doc, wx, wy);
+    const it = line
+      ? { id: uid(), kind: 'text', x: line.x, y: line.y, w: line.w, lh: line.lh, text: '', size: Math.min(this.opts.textSize, Math.round(line.lh * 0.72)), color: this.opts.textColor }
+      : { id: uid(), kind: 'text', x: Math.round(wx), y: Math.round(wy - this.opts.textSize * 0.6), text: '', size: this.opts.textSize, color: this.opts.textColor };
     this.c.items.push(it);
     this.renderItems();
     this.startEdit(it.id, { isNew: true, snap });
@@ -829,15 +1010,26 @@ export class Board {
         const id = itEl.dataset.id;
         const it = this.item(id);
         const li = e.target.closest('li[data-i]');
+        const plus = e.target.closest('.mm-add');
+        if (plus) {
+          // Tik = nieuw verbonden idee; slepen naar een blaadje = verbinden; slepen naar leeg = nieuw idee daar.
+          this.action = { type: 'link', id, dir: plus.dataset.dir, sx: px, sy: py, moved: false };
+          break;
+        }
         this.select(id);
         if (e.target.closest('.rot-handle')) {
           const r = itEl.getBoundingClientRect(), br = this.el.getBoundingClientRect();
           this.action = { type: 'rotate', id, el: itEl, cx: r.left + r.width / 2 - br.left, cy: r.top + r.height / 2 - br.top, snap: this.snapshot(), moved: false };
           break;
         }
+        const resize = !!e.target.closest('.handle');
+        // Een blaadje van een mindmap neemt zijn takken mee.
+        const group = !resize && it.kind === 'sticky'
+          ? this.descendants(id).map(cid => { const c = this.item(cid); return { c, ox: c.x, oy: c.y, el: this.itemEl(cid) }; })
+          : [];
         this.action = {
-          type: e.target.closest('.handle') ? 'resize' : 'move',
-          id, el: itEl, sx: px, sy: py, ox: it.x, oy: it.y, ow: it.w, oh: it.h,
+          type: resize ? 'resize' : 'move',
+          id, el: itEl, sx: px, sy: py, ox: it.x, oy: it.y, ow: it.w, oh: it.h, group,
           moved: false, line: li ? +li.dataset.i : null, snap: this.snapshot(),
         };
       }
@@ -937,6 +1129,11 @@ export class Board {
           it.y = Math.round(a.oy + dy);
           a.el.style.left = `${it.x}px`;
           a.el.style.top = `${it.y}px`;
+          for (const g of a.group) {
+            g.c.x = Math.round(g.ox + dx);
+            g.c.y = Math.round(g.oy + dy);
+            if (g.el) { g.el.style.left = `${g.c.x}px`; g.el.style.top = `${g.c.y}px`; }
+          }
         } else if (it.kind === 'sticker') {
           // In verhouding vergroten of verkleinen.
           const f = Math.max(16 / Math.min(a.ow, a.oh), (a.ow + dx + a.oh + dy) / (a.ow + a.oh));
@@ -950,7 +1147,18 @@ export class Board {
           a.el.style.width = `${it.w}px`;
           a.el.style.minHeight = `${it.h}px`;
         }
+        if (it.kind === 'sticky') this.renderLinks();
         this.positionBar();
+        break;
+      }
+      case 'link': {
+        if (!a.moved && Math.hypot(px - a.sx, py - a.sy) < 8) return;
+        a.moved = true;
+        const src = this.item(a.id);
+        if (!src) return;
+        a.p ||= this.gLive.appendChild(document.createElementNS(SVGNS, 'path'));
+        a.p.setAttribute('class', 'link-live');
+        a.p.setAttribute('d', linkPath(this.itemRect(src), { x: wx, y: wy, w: 0, h: 0 }));
         break;
       }
       case 'rotate': {
@@ -1030,9 +1238,21 @@ export class Board {
       case 'move':
       case 'resize':
       case 'rotate':
-        if (a.moved) { this.pushUndo(a.snap); this.changed(); }
-        else if (commit && a.type === 'move') this.tap(a);
+        if (a.moved) {
+          this.snapToLines(a.id);
+          this.pushUndo(a.snap);
+          this.changed();
+        } else if (commit && a.type === 'move') this.tap(a);
         break;
+      case 'link': {
+        this.gLive.innerHTML = '';
+        if (!commit || !e) return;
+        if (!a.moved) return this.addChild(a.id, a.dir);
+        const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('.item.sticky');
+        if (target && target.dataset.id !== a.id) this.linkTo(target.dataset.id, a.id);
+        else if (!target) this.addChild(a.id, a.dir, this.toWorld(...this.local(e)));
+        break;
+      }
       case 'create': {
         if (!commit || !e) return;
         const [px, py] = this.local(e);
@@ -1071,6 +1291,16 @@ export class Board {
       this.changed();
       if (on) this.celebrate(it, a.line);
     }
+  }
+
+  // Een verplaatst tekstvak op een gelinieerde pagina komt weer netjes op de lijnen.
+  snapToLines(id) {
+    const it = this.item(id);
+    if (it?.kind !== 'text' || !it.lh) return;
+    const line = snapToPaper(this.doc, it.x, it.y + it.lh / 2);
+    if (!line) return;
+    Object.assign(it, { x: line.x, y: line.y, w: line.w, lh: line.lh });
+    this.renderItems();
   }
 
   // Markeerstift-veeg over de nieuwe markering, en confetti als alles af is.

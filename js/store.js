@@ -7,6 +7,7 @@
 // aangepast, dan worden beide versies per onderdeel samengevoegd: niets gaat verloren.
 // `syncBase` is de serverversie (updatedAt) waarop dit toestel verder werkt.
 import { API_URL } from './config.js';
+import { pagesNeeded } from './model.js';
 
 const SESSION_KEY = 'notitiemaker.session.v1';
 // Per gebruiker, op de vaste id (oudere sessies hebben enkel een gebruikersnaam).
@@ -84,9 +85,10 @@ export function mergeDocs(local, server) {
   for (const list of LISTS) {
     if (local.content?.[list] || server.content?.[list]) content[list] = mergeList(local.content?.[list], server.content?.[list], deleted);
   }
-  if (local.content?.pages || server.content?.pages) content.pages = Math.max(local.content?.pages || 1, server.content?.pages || 1);
   // Titel, kaft, favoriet, prullenbak: de laatst gewijzigde versie wint.
   const newer = local.updatedAt >= server.updatedAt ? local : server;
+  // Aantal pagina's: dat van de laatste versie, maar nooit minder dan de inhoud nodig heeft.
+  if (local.content?.pages || server.content?.pages) content.pages = Math.max(newer.content?.pages || 1, pagesNeeded(content));
   const older = newer === local ? server : local;
   return { ...older, ...newer, content };
 }

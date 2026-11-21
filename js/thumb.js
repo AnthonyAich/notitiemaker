@@ -1,5 +1,5 @@
 // Miniatuurweergave van een document voor de bibliotheek.
-import { STICKY_COLORS, coverSVG } from './model.js';
+import { STICKY_COLORS, coverSVG, linkPath } from './model.js';
 import { strokePath, strokeBBox } from './ink.js';
 import { esc } from './ui.js';
 import { stickerParts } from './stickers.js';
@@ -36,6 +36,16 @@ export function thumbSVG(doc) {
       const w = Math.max(...rows.map(r => r.length)) * it.size * 0.45;
       grow(it.x, it.y, w, rows.length * it.size * 1.2);
       rows.forEach((r, i) => parts.push(`<rect x="${it.x}" y="${it.y + i * it.size * 1.2 + it.size * 0.4}" width="${r.length * it.size * 0.45}" height="${it.size * 0.4}" rx="3" fill="${esc(it.color)}" opacity=".7"/>`));
+    }
+  }
+
+  // Verbindingslijnen van mindmaps.
+  const byId = new Map(items.map(it => [it.id, it]));
+  const rect = it => ({ x: it.x, y: it.y, w: it.w, h: Math.max(it.h, 56 + (it.lines?.length || 0) * 26) });
+  for (const it of items) {
+    const p = it.parent && byId.get(it.parent);
+    if (p?.kind === 'sticky' && it.kind === 'sticky') {
+      parts.unshift(`<path d="${linkPath(rect(p), rect(it))}" stroke="${(STICKY_COLORS[it.color] || STICKY_COLORS.geel).hl}" stroke-width="4" fill="none"/>`);
     }
   }
 

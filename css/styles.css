@@ -524,3 +524,61 @@ h1 { font-size: 44px; letter-spacing: -.02em; margin: 14px 0 18px; }
 }
 .st-tile:hover .st-del, .st-tile.on .st-del { display: block; }
 .st-hint { margin: 0; font-size: 12px; line-height: 1.4; color: #c9c9cf; }
+
+/* ---------- mindmap ---------- */
+
+.links-layer { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.links-layer path { fill: none; stroke-width: 3.5; stroke-linecap: round; }
+.ink-live .link-live { fill: none; stroke: var(--accent); stroke-width: calc(3px / var(--z, 1)); stroke-dasharray: calc(8px / var(--z, 1)) calc(6px / var(--z, 1)); stroke-linecap: round; }
+.mm-add {
+  display: none; position: absolute; z-index: 2;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 600 20px/27px var(--ui); text-align: center;
+  box-shadow: 0 0 0 3px #fff, 0 2px 6px rgba(0, 0, 0, .25);
+  cursor: pointer; touch-action: none;
+}
+.mm-add:hover { background: #1565c0; }
+.mm-r { left: calc(100% + 14px); top: 50%; margin-top: -14px; }
+.mm-l { right: calc(100% + 14px); top: 50%; margin-top: -14px; }
+.mm-t { top: -44px; left: 50%; margin-left: -14px; }
+.mm-b { bottom: -44px; left: 50%; margin-left: -14px; }
+.board[data-tool=select] .sticky.selected:not(.editing) .mm-add { display: block; }
+
+/* ---------- typen op de lijnen ---------- */
+
+.text.lined {
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  line-height: var(--lh); min-height: var(--lh);
+  padding: 0 4px;
+}
+
+/* ---------- pagina-overzicht ---------- */
+
+.pages-overlay {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; flex-direction: column;
+  background: #141416; color: var(--text);
+}
+.po-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 16px 20px; border-bottom: 1px solid #2c2c30; }
+.po-head h2 { margin: 0; font-size: 20px; }
+.po-hint { color: var(--muted); font-size: 13px; flex: 1; min-width: 200px; }
+.po-grid {
+  flex: 1; overflow-y: auto; padding: 20px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 22px 16px; align-content: start;
+}
+.pcard { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.pthumb { position: relative; overflow: hidden; background: #fff; border-radius: 4px; box-shadow: 0 4px 14px rgba(0, 0, 0, .45); cursor: pointer; }
+.pthumb:hover { outline: 3px solid var(--accent-2); }
+.pworld { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
+.pworld .page { box-shadow: none; }
+.pbar { display: flex; align-items: center; gap: 6px; width: 150px; }
+.pnum { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pgrip { font-size: 20px; line-height: 1; padding: 4px 6px; border-radius: 8px; background: #2c2c30; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.pacts { margin-left: auto; display: flex; gap: 2px; }
+.pacts button { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; }
+.pacts button:hover { background: #2c2c30; }
+.pacts .ic { width: 17px; height: 17px; }
+.pcard.placeholder { opacity: .3; }
+.pcard.ghost { position: fixed; z-index: 30; pointer-events: none; opacity: .95; }
+.pcard.ghost .pthumb { box-shadow: 0 16px 40px rgba(0, 0, 0, .6); }

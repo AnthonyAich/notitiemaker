@@ -7,6 +7,7 @@ import { printDoc } from './print.js';
 import { listVersions, getVersion, snapshot } from './versions.js';
 import { needsOcr, inkSignature, recognize } from './ocr.js';
 import { STICKER_CATS, stickerSVG, stickerLabel, ensureStickerDefs, stickerFromSVG } from './stickers.js';
+import { openPageOverview } from './pages.js';
 import { esc, icon, dialog, confirmDialog, popMenu, closeMenu, toast, fmtDate } from './ui.js';
 
 const TOOLS = [
@@ -95,6 +96,7 @@ function shell() {
           ${TOOLS.map(t => `<button class="tool" data-tool="${t.id}" title="${t.label} (${t.key})" aria-label="${t.label}">${icon(t.icon)}</button>`).join('')}
         </div>
         <div class="grp">
+          <button class="icon-btn" id="pagesBtn" title="Pagina's: verplaatsen, dupliceren, verwijderen">${icon('pages')}</button>
           <button class="icon-btn" id="addPageBtn" title="Pagina toevoegen">${icon('filePlus')}</button>
           <button class="icon-btn" id="printBtn" title="Afdrukken of opslaan als PDF">${icon('printer')}</button>
           <button class="icon-btn" id="fitBtn" title="Alles in beeld (0)">${icon('fit')}</button>
@@ -590,6 +592,7 @@ function showEditor(doc) {
   $('editor').classList.toggle('is-notebook', doc.type === 'notebook');
   renderTabs();
   $('addPageBtn').hidden = doc.type !== 'notebook';
+  $('pagesBtn').hidden = doc.type !== 'notebook';
   document.title = `${doc.title} · Notitiemaker`;
   S.board = new Board($('boardHost'), doc, {
     onChange: scheduleSave,
@@ -659,7 +662,9 @@ function renderSubbar() {
     case 'text':
       h = [[20, 'A'], [28, 'A'], [40, 'A']].map(([s, l], i) =>
         `<button class="width txt${s === o.textSize ? ' on' : ''}" data-k="textSize" data-v="${s}" data-num style="font-size:${13 + i * 4}px">${l}</button>`).join('')
-        + sep + swatches(INK_COLORS, o.textColor, 'textColor') + '<span class="hint">Tik om tekst te plaatsen</span>';
+        + sep + swatches(INK_COLORS, o.textColor, 'textColor')
+        + `<span class="hint">${S.doc?.type === 'notebook' && S.doc.paper !== 'blanco' && S.doc.paper !== 'week'
+          ? 'Tik op een lijn om te typen · Enter = volgende lijn' : 'Tik om tekst te plaatsen'}</span>`;
       break;
     case 'sticky':
       h = Object.entries(STICKY_COLORS).map(([k, c]) =>
@@ -1182,6 +1187,10 @@ function bindEvents() {
   $('undoBtn').addEventListener('click', () => S.board.undo());
   $('redoBtn').addEventListener('click', () => S.board.redo());
   $('addPageBtn').addEventListener('click', () => S.board.addPage());
+  $('pagesBtn').addEventListener('click', () => {
+    S.board.finishEdit();
+    openPageOverview(document.querySelector('#editor .ed-body'), S.board);
+  });
   $('printBtn').addEventListener('click', () => { S.board.finishEdit(); flushSave(); printDoc(S.doc); });
   $('fitBtn').addEventListener('click', () => S.board.fit());
   $('zoomLabel').addEventListener('click', () => S.board.fit());
@@ -1217,7 +1226,7 @@ function bindEvents() {
       printDoc(S.doc);
       return;
     }
-    if (!S.board || document.querySelector('dialog[open]')) return;
+    if (!S.board || document.querySelector('dialog[open], .pages-overlay')) return;
     if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
     if (S.board.key(e)) e.preventDefault();
   });
