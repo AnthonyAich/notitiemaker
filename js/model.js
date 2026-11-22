@@ -177,7 +177,7 @@ export function uid() {
 // als iemand op twee toestellen tegelijk voor het eerst inlogt.
 // Verhoog WELCOME_VERSION telkens de inhoud verandert: via Nieuw → Rondleiding
 // krijgt een verouderde rondleiding dan de nieuwe inhoud.
-export const WELCOME_VERSION = 4;
+export const WELCOME_VERSION = 5;
 
 const welcomeSticker = (key, x, y, size, rot) => ({ id: uid(), kind: 'sticker', key, x, y, w: size, h: size, rot });
 
@@ -215,7 +215,7 @@ export function welcomeContent() {
       'Het kader-icoon zet alles in beeld',
     ], W, 280),
     sticky(col(0), row2, 'roze', 'Documenten', [
-      'Nieuw: een notebook of whiteboard',
+      'Nieuw: een notebook, whiteboard of flashcards',
       'Kies een sjabloon: weekplanner, kanban, Cornell, …',
       '+ bovenaan opent een extra tabblad',
       'Weggegooid? Kijk in de prullenbak',
@@ -249,12 +249,19 @@ export function welcomeContent() {
     ], W, 200),
     mindmap,
     { ...sticky(col(2) + 60, row3 + 30, 'blauw', 'Een tak', ['Ik beweeg mee met Mindmap'], 260, 120), parent: mindmap.id },
+    sticky(col(3), row3, 'roze', 'Flashcards', [
+      'Nieuw → Flashcards: typ je kaarten of plak een lijst',
+      'Leren in 4 stappen: bekijken, kiezen, omdraaien, typen',
+      'Voor → achter, omgekeerd of door elkaar',
+      'Gekende kaarten komen later terug om te herhalen',
+    ], W, 200),
     label(col(3) + 20, 6, 'Teken hier iets ✍️', 34),
     // Een paar echte stickers, als voorbeeld.
     welcomeSticker('raket', 600, -170, 84, 12),
     welcomeSticker('klaar', W - 46, -26, 64, 8),
     welcomeSticker('idee', col(2) - 40, row2 - 46, 64, -10),
     welcomeSticker('tapeRoze', col(3) + 110, row2 - 40, 100, 0),
+    welcomeSticker('boeken', col(3) + W - 46, row3 - 40, 66, 8),
   ];
   const strokes = [
     shape('rect', [col(3), 0], [col(3) + W, 290], '#9aa6b8', 4),
@@ -274,6 +281,14 @@ export function newDoc(type, title, opts = {}) {
     // Pagina 0 is de kaft.
     return { ...base, cover: opts.cover || 'bordeaux', paper: opts.paper || 'lijnen', content: { pages: 3, items: [], strokes: [] } };
   }
+  if (type === 'cards') {
+    // Flashcards: zie learn.js voor de velden.
+    const items = [
+      { id: 'sides', kind: 'setting', a: opts.a?.trim() || 'Voorkant', b: opts.b?.trim() || 'Achterkant' },
+      { id: 'mode', kind: 'setting', v: 'ab' },
+    ];
+    return { ...base, content: { items, strokes: [] } };
+  }
   return { ...base, content: (BOARD_TEMPLATES[opts.template] || BOARD_TEMPLATES.leeg).make() };
 }
 
@@ -291,6 +306,7 @@ export function docText(doc) {
   const parts = [doc.title];
   for (const it of doc.content?.items || []) {
     if (it.kind === 'sticky') parts.push(it.title, ...(it.lines || []).map(l => l.text));
+    else if (it.kind === 'card') parts.push(it.a, it.b);
     else parts.push(it.text);
   }
   if (doc.ocr?.text) parts.push(doc.ocr.text);

@@ -59,6 +59,29 @@ function textToLines(text, old) {
   });
 }
 
+const BLOCKS = new Set(['DIV', 'P', 'LI', 'UL', 'OL', 'TR', 'TABLE', 'BLOCKQUOTE', 'PRE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
+
+// De getypte tekst van een bewerkbaar vak. `innerText` telt een lege regel dubbel: browsers
+// zetten die als een blok met enkel een <br> erin.
+function typedText(el) {
+  let out = '', fresh = false; // fresh: wat nu volgt, begint op een nieuwe regel
+  const add = text => {
+    if (fresh && out && !out.endsWith('\n')) out += '\n';
+    fresh = false;
+    out += text;
+  };
+  const walk = node => {
+    for (const n of node.childNodes) {
+      if (n.nodeType === Node.TEXT_NODE) { if (n.nodeValue) add(n.nodeValue); }
+      else if (n.nodeName === 'BR') add('\n');
+      else if (BLOCKS.has(n.nodeName)) { fresh = true; walk(n); fresh = true; }
+      else walk(n);
+    }
+  };
+  walk(el);
+  return out.replace(/\u00a0/g, ' ').replace(/\n+$/, '');
+}
+
 const DUE_TITLES = { today: 'Vandaag', soon: 'Binnenkort', past: 'Datum voorbij', later: '' };
 
 // Tekst van een regel; een datum vooraan krijgt een label.
@@ -841,7 +864,8 @@ export class Board {
       el.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); this.finishEdit(); } });
       (it.title || !isNew ? ta : input).focus();
     } else {
-      el.contentEditable = 'true';
+      // Enkel tekst, ook bij plakken (oudere browsers kennen dat niet).
+      try { el.contentEditable = 'plaintext-only'; } catch { el.contentEditable = 'true'; }
       el.textContent = it.text;
       el.addEventListener('keydown', e => {
         if (e.key === 'Escape' || (e.key === 'Enter' && (e.metaKey || e.ctrlKey))) { e.preventDefault(); this.finishEdit(); }
@@ -871,7 +895,7 @@ export class Board {
       it.lines = textToLines(el.querySelector('.edit-lines').value, it.lines);
       remove = ed.isNew && !it.title && !it.lines.length;
     } else {
-      it.text = el.innerText.replace(/\n+$/, '');
+      it.text = typedText(el);
       remove = !it.text.trim();
     }
 

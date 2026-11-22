@@ -2,7 +2,7 @@
 // en worden gesynchroniseerd met de Google Sheet via de Apps Script web-app.
 //
 // Samenvoegen in plaats van overschrijven: elk onderdeel van een document (blaadje,
-// tekstvak, streep, sticker) krijgt bij elke wijziging een tijdstempel `t`, en wat je
+// tekstvak, streep, sticker, kaart) krijgt bij elke wijziging een tijdstempel `t`, en wat je
 // verwijdert wordt bijgehouden in `content.deleted`. Werd een document op twee plaatsen
 // aangepast, dan worden beide versies per onderdeel samengevoegd: niets gaat verloren.
 // `syncBase` is de serverversie (updatedAt) waarop dit toestel verder werkt.
@@ -189,7 +189,8 @@ class Store extends EventTarget {
     return d && !d.deleted ? d : null;
   }
 
-  save(doc) {
+  // Met `sync: false` enkel op dit toestel bewaren; versturen gebeurt later (schedule).
+  save(doc, { sync = true } = {}) {
     const cur = this.docs[doc.id];
     const stale = this.stale.get(doc.id);
     if (cur && cur !== doc && stale?.obj === doc && !cur.deleted) {
@@ -202,7 +203,7 @@ class Store extends EventTarget {
       this.persist();
       this.emit('merged', { ids: [doc.id] });
       this.emit('change', { ids: [doc.id], source: 'remote' });
-      this.schedule();
+      if (sync) this.schedule();
       return;
     }
     this.stamp(doc);
@@ -210,7 +211,7 @@ class Store extends EventTarget {
     this.docs[doc.id] = doc;
     this.persist();
     this.emit('change', { ids: [doc.id], source: 'local' });
-    this.schedule();
+    if (sync) this.schedule();
   }
 
   remove(id) {

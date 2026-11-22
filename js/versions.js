@@ -53,8 +53,9 @@ export async function snapshot(doc, minAgeMin = 20) {
     if (list[0] && Date.now() - list[0].at < minAgeMin * 60000) return;
     const st = await storeFor('readwrite');
     const at = Date.now();
-    const items = (doc.content.items || []).length + (doc.content.strokes || []).length;
-    st.put({ key: `${doc.id}:${at}`, docId: doc.id, at, title: doc.title, size: items, data });
+    const { items = [], strokes = [] } = doc.content;
+    const size = doc.type === 'cards' ? items.filter(i => i.kind === 'card').length : items.length + strokes.length;
+    st.put({ key: `${doc.id}:${at}`, docId: doc.id, at, title: doc.title, size, data });
     list.slice(KEEP - 1).forEach(v => st.delete(v.key));
   } catch (e) {
     console.warn('Versie bewaren mislukt', e);

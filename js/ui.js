@@ -13,6 +13,11 @@ const ICONS = {
   board: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21l4-4 4 4"/><path d="M7 8h4M7 11h6"/>',
   book: '<path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v16H6.5A1.5 1.5 0 0 0 5 20.5z"/><path d="M5 20.5A1.5 1.5 0 0 0 6.5 22H19v-3"/>',
   pointer: '<path d="M5 3.5 18.5 10l-5.8 1.9-2 5.8z"/><path d="m13 12 5 5"/>',
+  cards: '<rect x="3.5" y="8.5" width="14" height="11" rx="2"/><path d="M7 8.5V6.5a2 2 0 0 1 2-2h9.5a2 2 0 0 1 2 2V14a2 2 0 0 1-2 2h-1"/><path d="M7.5 14h6"/>',
+  play: '<path d="M8 5.5v13l10.5-6.5z"/>',
+  flip: '<path d="M4 9.5A8 8 0 0 1 18.5 8"/><path d="M19.5 4v4.5H15"/><path d="M20 14.5A8 8 0 0 1 5.5 16"/><path d="M4.5 20v-4.5H9"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  clipboard: '<rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1z"/><path d="M9 11h6M9 15h4"/>',
   pen: '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/><path d="m14.5 5.5 3 3"/>',
   highlighter: '<path d="m9 11-5.5 5.5V20h3.5l5.5-5.5"/><path d="m9 11 7-7 4 4-7 7z"/><path d="M14 21h7"/>',
   eraser: '<path d="M9 20h11"/><path d="m4.6 14.6 9.2-9.2a2 2 0 0 1 2.8 0l3 3a2 2 0 0 1 0 2.8L11 20H9.4z"/><path d="m9 10 5 5"/>',
@@ -93,12 +98,14 @@ export function dialog({ title, body = '', submit = 'OK', cancel = 'Annuleren', 
       <h2>${esc(title)}</h2>
       <div class="dlg-body">${body}</div>
       <div class="dlg-actions">
-        ${cancel ? `<button value="cancel" class="btn ghost" formnovalidate>${esc(cancel)}</button>` : ''}
+        ${cancel ? `<button type="button" value="cancel" class="btn ghost" data-cancel>${esc(cancel)}</button>` : ''}
         <button value="ok" class="btn ${danger ? 'danger' : 'primary'}">${esc(submit)}</button>
       </div>
     </form>`;
     document.body.append(d);
     const form = d.querySelector('form');
+    // Geen submit-knop: Enter in een tekstveld zou anders annuleren.
+    d.querySelector('[data-cancel]')?.addEventListener('click', () => d.close('cancel'));
     d.addEventListener('close', () => {
       const data = d.returnValue === 'ok' ? Object.fromEntries(new FormData(form)) : null;
       d.remove();

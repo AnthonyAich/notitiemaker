@@ -1,11 +1,11 @@
 # Notitiemaker
 
-Een notitie-app in de browser met whiteboards (notitieblaadjes, tekst, pen en markeerstift) en notebooks met een kaft en pagina's.
+Een notitie-app in de browser met whiteboards (notitieblaadjes, tekst, pen en markeerstift), notebooks met een kaft en pagina's, en flashcards om te leren.
 De app is gemaakt met gewone HTML, CSS en JavaScript, zonder build-stap. Je host hem gratis op **GitHub Pages** en bewaart de data van al je gebruikers in je eigen **Google Sheet**.
 
 ## Wat kan het?
 
-- **Bibliotheek** met Documenten, Favorieten, Whiteboards en Notebooks. Je kunt zoeken in titels en in de tekst van je notities.
+- **Bibliotheek** met Documenten, Favorieten, Whiteboards, Notebooks en Flashcards. Je kunt zoeken in titels en in de tekst van je notities.
 - **Whiteboard**: een oneindig canvas met stippen. Je verschuift met slepen of het trackpad en zoomt met knijpen of ⌘/Ctrl + scrollen.
 - **Notitieblaadjes** in 6 kleuren, met een titel en een lijst met bolletjes.
   - Tik op een regel om ze te markeren, zoals een to-do die af of belangrijk is.
@@ -24,8 +24,15 @@ De app is gemaakt met gewone HTML, CSS en JavaScript, zonder build-stap. Je host
 - **Notebooks** met een kaft en gelinieerd, geruit, gestippeld of blanco papier. Nieuwe pagina's voeg je toe met de knop rechtsboven.
   - **Pagina's ordenen**: de knop *Pagina's* toont alle pagina's als miniatuur. Sleep een pagina aan ⠿ naar een andere plek, of dupliceer, verwijder of voeg een lege pagina in. Alles op een pagina verhuist mee.
   - **Typen op de lijnen**: op gelinieerd, Cornell-, geruit of gestippeld papier begint tekst op de dichtstbijzijnde lijn. Enter gaat naar de volgende lijn en lange zinnen lopen vanzelf door; versleep je de tekst, dan valt ze weer op de lijnen.
+- **Flashcards** (Nieuw → Flashcards): kaarten met een voor- en een achterkant, die je een eigen naam geeft (Frans / Nederlands, Begrip / Definitie, …).
+  - **Ingeven** in een lijst met twee kolommen: Enter gaat naar het volgende vak. Of **plak een lijst** uit Excel, Word of Quizlet; je ziet eerst een voorbeeld. Meerdere juiste antwoorden scheid je met `/`, en wat tussen haakjes staat mag je bij het typen weglaten.
+  - **Leren in vier stappen**: *Bekijken* (met *Ken ik al* sla je het kiezen over), *Kiezen* uit vier antwoorden, *Omdraaien* en *Typen*. Juist is een stap vooruit, fout een stap terug; na stap 4 is de kaart gekend. Een ronde telt 7 kaarten en een foute kaart komt in dezelfde ronde terug.
+  - Bij het **typen** tellen hoofdletters en leestekens niet mee. Een typfout of een vergeten accent is *bijna*: de kaart blijft op dezelfde stap. *Toch juist rekenen* kan altijd. Lange antwoorden (meer dan 40 tekens) leg je uit in plaats van ze te typen.
+  - **Richting**: voor → achter, achter → voor, of door elkaar. De voortgang wordt per richting apart bijgehouden.
+  - **Herhalen**: gekende kaarten komen terug na 1, 3, 7, 14 en 30 dagen. In de bibliotheek zie je hoeveel er te herhalen zijn. Wist je een kaart niet meer, dan gaat ze terug naar het leren.
+  - Elk antwoord wordt meteen op je toestel bewaard en na elke ronde naar de Sheet gestuurd. Leer je op twee toestellen, dan wordt de voortgang per kaart samengevoegd. Opnieuw beginnen kan via de documentnaam → *Voortgang wissen*.
 - **Ongedaan maken / opnieuw** (⌘Z / ⇧⌘Z), een back-up als .json en het terugzetten ervan.
-- **Afdrukken of opslaan als PDF** (⌘P of het printer-icoon): een notebook wordt één A4 per pagina, een whiteboard past op één liggende A4. Kies in het afdrukvenster *Opslaan als PDF*.
+- **Afdrukken of opslaan als PDF** (⌘P of het printer-icoon): een notebook wordt één A4 per pagina, een whiteboard past op één liggende A4, flashcards worden een lijst met twee kolommen. Kies in het afdrukvenster *Opslaan als PDF*.
 - **Prullenbak**: verwijderde documenten blijven 30 dagen bewaard en kun je terugzetten.
 - **Versiegeschiedenis** (documentmenu → Versiegeschiedenis): terug naar een eerdere versie. Versies worden bewaard op je toestel en in de Google Sheet.
 - **Zoeken in handschrift**: je handschrift wordt herkend met Google tekstherkenning, zodat de zoekbalk het ook vindt.
@@ -34,7 +41,7 @@ De app is gemaakt met gewone HTML, CSS en JavaScript, zonder build-stap. Je host
 - **Werkt offline**: na het eerste bezoek opent de app ook zonder internet.
 - **Op het beginscherm zetten** van je iPad: Safari → Deel → *Zet op beginscherm*. De app opent dan schermvullend.
 
-Sneltoetsen: `V` selecteren, `L` lasso, `P` pen, `H` markeerstift, `S` vormen, `E` gum, `T` tekst, `N` notitieblaadje, `K` stickers, `⌘P` afdrukken, `0` alles in beeld, `+`/`-` zoomen, `⌫` verwijderen, `⌘D` dupliceren, spatiebalk ingedrukt houden om te verschuiven.
+Sneltoetsen: `V` selecteren, `L` lasso, `P` pen, `H` markeerstift, `S` vormen, `E` gum, `T` tekst, `N` notitieblaadje, `K` stickers, `⌘P` afdrukken, `0` alles in beeld, `+`/`-` zoomen, `⌫` verwijderen, `⌘D` dupliceren, spatiebalk ingedrukt houden om te verschuiven. Bij het leren van flashcards: spatie of Enter om te draaien of verder te gaan, `1`–`4` om te kiezen, `1` `2` `3` voor *wist ik niet*, *twijfel* en *wist ik*, `Esc` om te stoppen.
 
 ## Gebruikers
 
@@ -87,9 +94,9 @@ In de Google Sheet staan deze tabbladen:
 - **Gebruikers**: gebruikersnaam, naam, versleuteld wachtwoord, rol en of het account actief is.
 - **Documenten**: één rij per document, met de eigenaar in de eerste kolom. Kolom `data` (en de kolommen erna) bevat het volledige document als JSON. Pas die niet met de hand aan.
 - **Versies**: hoogstens één kopie per uur per document, de laatste 30.
-- **Overzicht**: een leesbare lijst van alle blaadjes en regels (en herkend handschrift), per gebruiker, met een kolom *Gemarkeerd*.
+- **Overzicht**: een leesbare lijst van alle blaadjes en regels (en herkend handschrift), per gebruiker, met een kolom *Gemarkeerd*. Flashcards staan hier niet in.
 
-**Samenvoegen**: elk blaadje, tekstvak, elke streep en sticker heeft een eigen tijdstempel. Werd een document op twee toestellen tegelijk aangepast (bijvoorbeeld op een iPad die even offline was), dan worden beide versies samengevoegd: nieuwe dingen van beide kanten blijven staan, verwijderingen worden toegepast, en als hetzelfde blaadje aan beide kanten veranderde, wint de laatste wijziging aan dat blaadje.
+**Samenvoegen**: elk blaadje, tekstvak, elke streep, sticker en flashcard (en de voortgang van elke kaart) heeft een eigen tijdstempel. Werd een document op twee toestellen tegelijk aangepast (bijvoorbeeld op een iPad die even offline was), dan worden beide versies samengevoegd: nieuwe dingen van beide kanten blijven staan, verwijderingen worden toegepast, en als hetzelfde blaadje aan beide kanten veranderde, wint de laatste wijziging aan dat blaadje.
 
 ---
 
@@ -165,6 +172,8 @@ Open daarna <http://localhost:5173>. Dubbelklikken op `index.html` werkt niet, o
 | `js/ink.js`, `js/thumb.js` | Pennenstreken, vormen, vormherkenning en miniaturen |
 | `js/print.js` | Afdrukken en PDF |
 | `js/pages.js` | Pagina-overzicht van een notebook |
+| `js/cards.js` | Flashcards: kaarten ingeven, lijst plakken en het leerscherm |
+| `js/learn.js` | Flashcards: stappen, rondes, herhalen en antwoorden controleren |
 | `js/versions.js` | Versiegeschiedenis op het toestel |
 | `js/ocr.js` | Handschrift omzetten naar afbeeldingen voor de tekstherkenning |
 | `js/fx.js` | Confetti |

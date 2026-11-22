@@ -2,11 +2,12 @@
 // Eigen bestanden: eerst het netwerk (altijd de nieuwste versie), anders de kopie.
 // Lettertypes van Google: eerst de kopie.
 
-const CACHE = 'notitiemaker-v15';
+const CACHE = 'notitiemaker-v16';
 const SHELL = [
   './', 'index.html', 'css/styles.css', 'manifest.webmanifest', 'icon.svg', 'icon-180.png',
   'js/main.js', 'js/board.js', 'js/store.js', 'js/model.js', 'js/ink.js', 'js/thumb.js',
   'js/ui.js', 'js/fx.js', 'js/print.js', 'js/versions.js', 'js/ocr.js', 'js/config.js', 'js/stickers.js', 'js/pages.js',
+  'js/cards.js', 'js/learn.js',
 ];
 
 self.addEventListener('install', e => {

@@ -1,6 +1,8 @@
 // App-shell: bibliotheek, editor, instellingen en synchronisatiestatus.
 import { store } from './store.js';
 import { Board } from './board.js';
+import { CardsView } from './cards.js';
+import { stats as learnStats, keepProgress, hasProgress, clearProgress } from './learn.js';
 import { newDoc, cloneDoc, welcomeDoc, welcomeContent, WELCOME_VERSION, uid, docText, stickyStats, COVERS, PAPERS, STICKY_COLORS, INK_COLORS, HL_COLORS, BOARD_TEMPLATES } from './model.js';
 import { thumbSVG } from './thumb.js';
 import { printDoc } from './print.js';
@@ -25,14 +27,16 @@ const TOOLS = [
 const SHAPES = [['arrow', 'Pijl'], ['line', 'Lijn'], ['rect', 'Rechthoek'], ['ellipse', 'Ellips']];
 const TRASH_DAYS = 30;
 
-// Alleen notebooks en whiteboards; de stickerbibliotheek is ook een (verborgen) document.
-const isDoc = d => d.type === 'board' || d.type === 'notebook';
+// De stickerbibliotheek is ook een (verborgen) document.
+const TYPE_ICONS = { board: 'board', notebook: 'book', cards: 'cards' };
+const isDoc = d => !!TYPE_ICONS[d.type];
 
 const FILTERS = {
   all: { title: 'Documenten', icon: 'folder', test: d => isDoc(d) && !d.trashedAt },
   fav: { title: 'Favorieten', icon: 'star', test: d => isDoc(d) && !d.trashedAt && d.favorite },
   board: { title: 'Whiteboards', icon: 'board', test: d => !d.trashedAt && d.type === 'board' },
   notebook: { title: 'Notebooks', icon: 'book', test: d => !d.trashedAt && d.type === 'notebook' },
+  cards: { title: 'Flashcards', icon: 'cards', test: d => !d.trashedAt && d.type === 'cards' },
   trash: { title: 'Prullenbak', icon: 'trash', test: d => isDoc(d) && !!d.trashedAt },
 };
 
@@ -138,12 +142,13 @@ function greeting() {
 }
 
 function progressHTML(d) {
-  const { total, done } = stickyStats(d);
+  const st = d.type === 'cards' ? learnStats(d.content) : null;
+  const { total, done } = st ? { total: st.total, done: st.known } : stickyStats(d);
   if (!total) return '';
   const pct = Math.round((done / total) * 100);
-  return `<div class="progress${done === total ? ' full' : ''}" title="${pct}% gemarkeerd">
+  return `<div class="progress${done === total ? ' full' : ''}" title="${pct}% ${st ? 'gekend' : 'gemarkeerd'}">
     <span class="bar"><i style="width:${pct}%"></i></span>${done}/${total}${done === total ? ' 🎉' : ''}
-  </div>`;
+  </div>${st?.due ? `<div class="due-chip">${st.due} te herhalen</div>` : ''}`;
 }
 
 // Alleen gevonden in de herkende handschrift-tekst?
@@ -218,6 +223,50 @@ async function askBoard() {
   const d = newDoc('board', title === 'Naamloos whiteboard' && res.template !== 'leeg' ? BOARD_TEMPLATES[res.template].label : title, res);
   store.save(d);
   openDoc(d.id);
+}
+
+const SIDE_PRESETS = [['Frans', 'Nederlands'], ['Engels', 'Nederlands'], ['Begrip', 'Definitie'], ['Vraag', 'Antwoord']];
+
+async function askCards() {
+  const res = await dialog({
+    title: 'Nieuwe flashcards',
+    submit: 'Maken',
+    body: `
+      <label class="field"><span>Titel</span><input name="title" value="Naamloze flashcards" required autofocus></label>
+      <div class="grid2">
+        <label class="field"><span>Naam van de voorkant</span><input name="a" value="Voorkant" maxlength="40"></label>
+        <label class="field"><span>Naam van de achterkant</span><input name="b" value="Achterkant" maxlength="40"></label>
+      </div>
+      <div class="chips">${SIDE_PRESETS.map(([a, b], i) => `<button type="button" class="chip" data-preset="${i}">${a} – ${b}</button>`).join('')}</div>`,
+    onOpen(d) {
+      d.addEventListener('click', e => {
+        const p = e.target.closest('[data-preset]');
+        if (!p) return;
+        const f = d.querySelector('form');
+        [f.elements.a.value, f.elements.b.value] = SIDE_PRESETS[+p.dataset.preset];
+      });
+    },
+  });
+  if (!res) return;
+  const d = newDoc('cards', res.title.trim() || 'Naamloze flashcards', res);
+  store.save(d);
+  openDoc(d.id);
+}
+
+async function resetProgress(doc) {
+  if (!await confirmDialog('Voortgang wissen?', 'Alle kaarten beginnen opnieuw bij stap 1, in beide richtingen. De kaarten zelf blijven staan.', 'Wissen')) return;
+  const live = S.doc?.id === doc.id;
+  if (live) {
+    if (S.board.round) S.board.stop();
+    S.board.pushUndo(S.board.snapshot());
+  }
+  const d = live ? S.doc : store.get(doc.id);
+  if (!d) return;
+  clearProgress(d.content);
+  store.save(d);
+  if (live) S.board.load(d);
+  else renderLibrary();
+  toast('De voortgang is gewist');
 }
 
 async function rename(doc) {
@@ -369,6 +418,8 @@ async function restoreVersion(doc, v) {
   await snapshot(doc, 0);
   const live = S.doc?.id === doc.id && S.board;
   if (live) S.board.pushUndo(S.board.snapshot());
+  // Flashcards: de kaarten gaan terug, wat je intussen leerde blijft staan.
+  if (doc.type === 'cards') keepProgress(old.content, doc.content);
   doc.content = old.content;
   for (const k of ['title', 'cover', 'paper']) if (old[k] !== undefined) doc[k] = old[k];
   store.save(doc);
@@ -429,6 +480,7 @@ function docMenuItems(doc) {
     { icon: 'edit', label: 'Naam wijzigen', action: () => rename(doc) },
     { icon: doc.favorite ? 'star' : 'starFill', label: doc.favorite ? 'Uit favorieten' : 'Aan favorieten toevoegen', action: () => { doc.favorite = !doc.favorite; saveNow(doc); } },
     ...(doc.type === 'notebook' ? [{ icon: 'palette', label: 'Kaft en papier', action: () => changeCover(doc) }] : []),
+    ...(doc.type === 'cards' && hasProgress(doc.content) ? [{ icon: 'restore', label: 'Voortgang wissen', action: () => resetProgress(doc) }] : []),
     { icon: 'printer', label: 'Afdrukken of opslaan als PDF', action: () => { flushSave(); printDoc(doc); } },
     { icon: 'history', label: 'Versiegeschiedenis', action: () => showVersions(doc) },
     { icon: 'download', label: 'Exporteren (.json)', action: () => downloadJSON(`${slug(doc.title)}.json`, doc) },
@@ -513,7 +565,7 @@ function renderTabs() {
   $('tabList').innerHTML = tabDocs().map(d => {
     const on = d.id === S.doc?.id;
     return `<div class="ed-tab${on ? ' on' : ''}" data-id="${d.id}" role="tab" aria-selected="${on}" title="${esc(d.title)}">
-      <button class="ed-tab-title">${icon(d.type === 'notebook' ? 'book' : 'board', 'type')}<span>${esc(d.title)}</span>${on ? icon('chevron') : ''}</button>
+      <button class="ed-tab-title">${icon(TYPE_ICONS[d.type], 'type')}<span>${esc(d.title)}</span>${on ? icon('chevron') : ''}</button>
       <button class="ed-tab-close" title="Tabblad sluiten" aria-label="Sluit ${esc(d.title)}">${icon('x')}</button>
     </div>`;
   }).join('');
@@ -542,7 +594,8 @@ function newTabMenu(anchor) {
   popMenu(anchor, [
     { icon: 'book', label: 'Nieuw notebook', action: askNotebook },
     { icon: 'board', label: 'Nieuw whiteboard', action: askBoard },
-    ...(recent.length ? ['-', ...recent.map(d => ({ icon: d.type === 'notebook' ? 'book' : 'board', label: d.title, action: () => openDoc(d.id) }))] : []),
+    { icon: 'cards', label: 'Nieuwe flashcards', action: askCards },
+    ...(recent.length ? ['-', ...recent.map(d => ({ icon: TYPE_ICONS[d.type], label: d.title, action: () => openDoc(d.id) }))] : []),
   ]);
 }
 
@@ -555,6 +608,7 @@ function openDoc(id) {
 function saveNow(doc) {
   store.save(doc);
   if (S.doc === doc) {
+    document.title = `${doc.title} · Notitiemaker`;
     renderTabs();
     S.board.renderPages();
   } else {
@@ -590,14 +644,27 @@ function showEditor(doc) {
   $('library').hidden = true;
   $('editor').hidden = false;
   $('editor').classList.toggle('is-notebook', doc.type === 'notebook');
+  $('editor').classList.toggle('is-cards', doc.type === 'cards');
   renderTabs();
   $('addPageBtn').hidden = doc.type !== 'notebook';
   $('pagesBtn').hidden = doc.type !== 'notebook';
   document.title = `${doc.title} · Notitiemaker`;
+  const onHistory = (u, r) => { $('undoBtn').disabled = !u; $('redoBtn').disabled = !r; };
+  if (doc.type === 'cards') {
+    S.board = new CardsView($('boardHost'), doc, {
+      onChange: scheduleSave,
+      onHistory,
+      // Antwoorden: meteen op dit toestel, na elke ronde naar de Sheet.
+      onAnswer: () => store.save(S.doc, { sync: false }),
+      onRound: () => { store.schedule(); snapshot(S.doc, 20); },
+      onIdle: reloadOpenDoc,
+    });
+    return;
+  }
   S.board = new Board($('boardHost'), doc, {
     onChange: scheduleSave,
     onView: z => { $('zoomLabel').textContent = `${Math.round(z * 100)}%`; },
-    onHistory: (u, r) => { $('undoBtn').disabled = !u; $('redoBtn').disabled = !r; },
+    onHistory,
     onToolKey: setTool,
     stickerData,
     onSaveSticker: st => {
@@ -1133,6 +1200,7 @@ function bindEvents() {
   $('newBtn').addEventListener('click', e => popMenu(e.currentTarget, [
     { icon: 'book', label: 'Notebook', action: askNotebook },
     { icon: 'board', label: 'Whiteboard', action: askBoard },
+    { icon: 'cards', label: 'Flashcards', action: askCards },
     '-',
     { icon: 'help', label: 'Rondleiding', action: openWelcome },
     { icon: 'upload', label: 'Importeren (.json)', action: importFile },
@@ -1227,7 +1295,7 @@ function bindEvents() {
       return;
     }
     if (!S.board || document.querySelector('dialog[open], .pages-overlay')) return;
-    if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+    if (e.target.closest?.('input, textarea, select, [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
     if (S.board.key(e)) e.preventDefault();
   });
   document.addEventListener('keyup', e => S.board?.keyup(e));

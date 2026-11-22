@@ -1,8 +1,11 @@
 // Afdrukken en opslaan als PDF via het afdrukvenster van de browser.
 // Notebook: één A4-pagina per notebookpagina. Whiteboard: alles op één liggende A4.
+// Flashcards: een lijst met twee kolommen.
 import { worldHTML } from './board.js';
 import { PAGE_W, pageTop } from './model.js';
 import { strokeBBox } from './ink.js';
+import { cardsOf, sides, isEmpty } from './learn.js';
+import { esc } from './ui.js';
 
 const MM = 96 / 25.4; // pixels per millimeter
 
@@ -16,14 +19,24 @@ function root() {
   return r;
 }
 
-function pageStyle(landscape) {
+function pageStyle(landscape, margin = '0') {
   let st = document.getElementById('print-page-style');
   if (!st) {
     st = document.createElement('style');
     st.id = 'print-page-style';
     document.head.append(st);
   }
-  st.textContent = `@page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 0; }`;
+  st.textContent = `@page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: ${margin}; }`;
+}
+
+function cardsHTML(doc) {
+  const s = sides(doc.content);
+  const cards = cardsOf(doc.content).filter(c => !isEmpty(c));
+  return `<div class="print-cards">
+    <h1>${esc(doc.title)}</h1>
+    <table><thead><tr><th></th><th>${esc(s.a)}</th><th>${esc(s.b)}</th></tr></thead>
+    <tbody>${cards.map((c, i) => `<tr><td>${i + 1}</td><td dir="auto">${esc(c.a)}</td><td dir="auto">${esc(c.b)}</td></tr>`).join('')}</tbody></table>
+  </div>`;
 }
 
 function fitBoard(world, doc) {
@@ -48,12 +61,14 @@ function fitBoard(world, doc) {
 
 export async function printDoc(doc) {
   const r = root();
-  const notebook = doc.type === 'notebook';
-  pageStyle(!notebook);
-  r.className = notebook ? '' : 'landscape';
+  const notebook = doc.type === 'notebook', cards = doc.type === 'cards';
+  pageStyle(!notebook && !cards, cards ? '14mm' : '0');
+  r.className = notebook || cards ? '' : 'landscape';
   document.title = doc.title;
 
-  if (notebook) {
+  if (cards) {
+    r.innerHTML = cardsHTML(doc);
+  } else if (notebook) {
     const scale = (210 * MM) / PAGE_W - 0.0005;
     let html = '';
     for (let i = 0; i < (doc.content.pages || 1); i++) {

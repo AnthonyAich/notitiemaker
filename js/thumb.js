@@ -3,9 +3,34 @@ import { STICKY_COLORS, coverSVG, linkPath } from './model.js';
 import { strokePath, strokeBBox } from './ink.js';
 import { esc } from './ui.js';
 import { stickerParts } from './stickers.js';
+import { cardsOf, sides } from './learn.js';
+
+// Een stapeltje kaarten met de eerste kaart bovenaan.
+function cardsThumb(doc) {
+  const cards = cardsOf(doc.content).filter(c => c.a?.trim());
+  const colors = Object.values(STICKY_COLORS);
+  let hash = 0;
+  for (const ch of doc.id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  const c1 = colors[hash % colors.length].bg, c2 = colors[(hash + 2) % colors.length].bg;
+  const lines = [];
+  for (const w of (cards[0]?.a || '').trim().split(/\s+/).filter(Boolean)) {
+    const last = lines.length - 1;
+    if (last >= 0 && `${lines[last]} ${w}`.length <= 15) lines[last] += ` ${w}`;
+    else lines.push(w);
+  }
+  if (lines.length > 2) { lines.length = 2; lines[1] += ' …'; }
+  const cut = l => (l.length > 17 ? `${l.slice(0, 16)}…` : l);
+  const tspans = lines.map((l, i) => `<tspan x="200" dy="${i ? 42 : 0}">${esc(cut(l))}</tspan>`).join('');
+  const card = (rot, fill) => `<rect x="62" y="62" width="276" height="184" rx="16" fill="${fill}" transform="rotate(${rot} 200 154)"/>`;
+  return `<svg viewBox="30 24 340 255">${card(-7, c1)}${card(5, c2)}${card(0, '#fff')}
+    <text x="82" y="93" font-size="17" fill="#8a8f98" font-family="sans-serif">${esc(cut(sides(doc.content).a))}</text>
+    <path d="M62 106h276" stroke="#f0a8a8" stroke-width="2.5"/>
+    <text y="${lines.length > 1 ? 162 : 184}" text-anchor="middle" font-family="'Patrick Hand', cursive" font-size="40" fill="#222">${tspans}</text></svg>`;
+}
 
 export function thumbSVG(doc) {
   if (doc.type === 'notebook') return coverSVG(doc);
+  if (doc.type === 'cards') return cardsThumb(doc);
 
   const { items = [], strokes = [] } = doc.content || {};
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
